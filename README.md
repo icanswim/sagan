@@ -2,8 +2,8 @@
 A utility for serving data science applications.
 
 ## stack
-fastapi \
-tortoise orm
-
-
-
+fastapi (pydantic, starlette) \
+tortoise \
+jinja2 \
+uvicorn \
+sqlalchemy  
