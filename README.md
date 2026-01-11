@@ -2,11 +2,20 @@
 A utility for serving data science applications.
 
 ## stack
-fastapi (pydantic, starlette) \
-jinja2 \
-uvicorn \
-sqlalchemy  
+# datascience stack
+python
+numpy
+pytorch
+sklearn
+
+# frontend stack
+fastapi
+starlette
+
+# infrastructure stack
+docker
+gke
 
 ## instructions
-uvicorn sql_app.main:app  
+ 
 
