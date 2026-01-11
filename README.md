@@ -12,7 +12,7 @@ frontend stack
 fastapi  
 starlette  
 
-# infrastructure stack
+infrastructure stack  
 docker  
 gke  
 
