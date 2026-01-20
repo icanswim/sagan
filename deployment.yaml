@@ -1,0 +1,57 @@
+# deployment.yaml
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastapi-deployment
+  labels:
+    app: fastapi-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fastapi-app
+  template:
+    metadata:
+      labels:
+        app: fastapi-app
+    spec:
+      containers:
+      - name: fastapi-container
+        image: IMAGE_URI # Replace with image path
+        ports:
+        - containerPort: 8000 # listen/match targetPort
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fastapi-service
+  labels:
+    app: fastapi-app
+spec:
+  type: LoadBalancer # gke service
+  selector:
+    app: fastapi-app
+  ports:
+  - protocol: TCP
+    port: 8000 # Port exposed by the service
+    targetPort: 8000 # listen/match containerPort
