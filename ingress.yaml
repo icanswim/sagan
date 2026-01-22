@@ -1,28 +1,44 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: gke-google-site-ingress
+  name: sagan-ingress
   namespace: default
   annotations:
-    # 1. Links the reserved static IP address
-    kubernetes.io/ingress.global-static-ip-name: fastapi-ingress-ip # LoadBalancer ingress-ip name
-    
-    # 2. Links the Google-managed SSL certificate
-    networking.gke.io/managed-certificates: "gke-ingress-cert"  # match managed-cert.yaml metadata.name
-    
-    # 3. Specifies the GCE Ingress controller (External Application Load Balancer)
+    kubernetes.io/ingress.global-static-ip-name: "sagan-ingress-ip"
+    networking.gke.io/managed-certificates: "sagan-managed-cert"
     kubernetes.io/ingress.class: "gce"
-    
-    # 4. Optional: Force HTTP to HTTPS redirection (requires a FrontendConfig)
     networking.gke.io/v1beta1.FrontendConfig: "https-redirect-config"
-
-    # Ensure HTTP is NOT disabled so the LB can catch and redirect it
     kubernetes.io/ingress.allow-http: "true"
-
 spec:
   defaultBackend:
     service:
-      name: fastapi-service # LoadBalancer service
+      name: sagan-service
       port:
-        number: 8000
+        number: 80
+  rules:
+  - host: app.wylderhayes.com      
+    http:
+      paths:
+      - pathType: Prefix
+        path: "/"
+        backend:
+          service:
+            name: sagan-service   
+            port:
+              number: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sagan-service
+  namespace: default
+  annotations:
+    ://cloud.google.com: '{"ingress": true}'
+spec:
+  type: ClusterIP 
+  selector:
+    app: sagan-app
+  ports:
+  - port: 80
+    targetPort: 8000
 
