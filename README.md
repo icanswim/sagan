@@ -19,9 +19,9 @@ gke
 
 ## workflow
 
-gcloud auth login 
-create new gcloud project 
-gcloud config set project PROJECT_ID
+gcloud auth login  
+create new gcloud project  
+gcloud config set project PROJECT_ID  
 
 export PROJECT_ID=$(gcloud config get-value project)  
 export IMAGE_REPO_NAME=sagan-image-repo  
@@ -29,9 +29,9 @@ export IMAGE_NAME=sagan-image
 export IMAGE_TAG=test  
 export IMAGE_URI="us-central1-docker.pkg.dev/${PROJECT_ID}/${IMAGE_REPO_NAME}/${IMAGE_NAME}:${IMAGE_TAG}"  
 
-gcloud compute addresses create sagan-ingress-ip --global
-gcloud compute addresses describe sagan-ingress-ip --global --format="get(address)"
-create DNS redirect for app.wylderhayes.com to sagan-ingress-ip
+gcloud compute addresses create sagan-ingress-ip --global  
+gcloud compute addresses describe sagan-ingress-ip --global --format="get(address)"  
+create DNS redirect for app.wylderhayes.com to sagan-ingress-ip  
 
 gcloud services enable artifactregistry.googleapis.com  
 gcloud artifacts repositories create ${IMAGE_REPO_NAME} --repository-format=docker --location=us-central1 --description="gke docker fastapi"  
@@ -58,10 +58,10 @@ kubectl get deployments
 kubectl get services  
 kubectl get pods  
 gcloud container clusters list  
-kubectl describe managedcertificate sagan-managed-cert
-kubectl describe ingress sagan-ingress
+kubectl describe managedcertificate sagan-managed-cert  
+kubectl describe ingress sagan-ingress  
 
-gcloud container clusters delete sagan-cluster --zone us-central1-a
+gcloud container clusters delete sagan-cluster --zone us-central1-a  
 
 
 ## instructions 
