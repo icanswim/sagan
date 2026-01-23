@@ -29,6 +29,7 @@ export IMAGE_NAME=sagan-image
 export IMAGE_TAG=test  
 export IMAGE_URI="us-central1-docker.pkg.dev/${PROJECT_ID}/${IMAGE_REPO_NAME}/${IMAGE_NAME}:${IMAGE_TAG}"  
 
+glcoud services enable compute.googleapis.com  
 gcloud compute addresses create sagan-ingress-ip --global  
 gcloud compute addresses describe sagan-ingress-ip --global --format="get(address)"  
 create DNS redirect for app.wylderhayes.com to sagan-ingress-ip  
@@ -53,7 +54,7 @@ create managed-cert.yaml
 
 kubectl apply -f .
 
-kubectl get service fastapi-service  
+kubectl get service sagan-service  
 kubectl get deployments  
 kubectl get services  
 kubectl get pods  
