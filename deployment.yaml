@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
       - name: sagan-container
-        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo 
+        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-image:test
         ports:
         - containerPort: 8000 
         readinessProbe:
@@ -28,13 +28,7 @@ spec:
             port: 8000
           initialDelaySeconds: 5
           periodSeconds: 10
-        resources:
-          limits:
-            cpu: "500m"
-            memory: "512Mi"
-          requests:
-            cpu: "250m"
-            memory: "256Mi"
+
 
 
 

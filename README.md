@@ -36,10 +36,12 @@ create DNS redirect for app.wylderhayes.com to sagan-ingress-ip
 
 gcloud services enable artifactregistry.googleapis.com  
 gcloud artifacts repositories create ${IMAGE_REPO_NAME} --repository-format=docker --location=us-central1 --description="gke docker fastapi"  
+set IMAGE_URI in deployment.yaml
 
 gcloud auth configure-docker us-central1-docker.pkg.dev  
 
 docker build -t ${IMAGE_URI} .  
+docker run -d --name sagan-container -p 8000:8000 ${IMAGE_URI}  # run locally check
 docker push ${IMAGE_URI}  
 
 gcloud services enable container.googleapis.com  
@@ -52,7 +54,7 @@ create ingress.yaml
 create frontend-config.yaml  
 create managed-cert.yaml  
 
-kubectl apply -f .
+kubectl apply -f .  
 
 kubectl get service sagan-service  
 kubectl get deployments  
@@ -62,6 +64,7 @@ gcloud container clusters list
 kubectl describe managedcertificate sagan-managed-cert  
 kubectl describe ingress sagan-ingress  
 
+kubectl rollout restart deployment sagan-deployment  
 gcloud container clusters delete sagan-cluster --zone us-central1-a  
 
 
