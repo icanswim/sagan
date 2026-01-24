@@ -1,0 +1,9 @@
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: sagan-managed-cert # match ingress.yaml metadata.annotations.networking.gke.io/managed-certificates
+  namespace: default
+spec:
+  domains:
+    - app.wylderhayes.com
+
