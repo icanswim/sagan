@@ -2,20 +2,11 @@
 A utility for serving containerized data science applications. 
 
 # stack
-
-application stack  
-cosmosis  
-
-frontend stack  
-uvicorn  
-fastapi  
-
-infrastructure stack  
-github   
-docker  
-google artifacts  
 gke  
-
+docker  
+uv  
+fastapi  
+streamlit  
 
 ## workflow
 
@@ -40,24 +31,32 @@ set IMAGE_URI in deployment.yaml
 
 gcloud auth configure-docker us-central1-docker.pkg.dev  
 
-docker build -t ${IMAGE_URI} .  
-docker run -d --name sagan-container -p 8000:8000 ${IMAGE_URI}  # run locally check
+docker build --pull --no-cache -t ${IMAGE_URI} .  
 docker push ${IMAGE_URI}  
+
+docker run -it --rm -p 8000:8000 --name backend-container us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-image:test 
+
+docker run -it --rm -p 8501:8501 --name frontend-container us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-image:test 
 
 gcloud services enable container.googleapis.com  
 gcloud container clusters create sagan-cluster --zone us-central1-a --num-nodes=1  
 
 gcloud container clusters get-credentials sagan-cluster --zone us-central1-a  
 
+assemble repo  
+mkdir app  
 create deployment.yaml  
 create ingress.yaml  
 create frontend-config.yaml  
 create managed-cert.yaml  
-
+create Dockerfile  
+uv init frontend  
+uv add streamlit requests  
+uv init backend  
+uv add fastapi  
+ 
 kubectl apply -f .  
 
-kubectl get service sagan-service  
-kubectl get deployments  
 kubectl get services  
 kubectl get pods  
 gcloud container clusters list  
