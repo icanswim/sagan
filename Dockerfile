@@ -1,39 +1,37 @@
-# --- Stage 1: Builder ---
+#uv streamlit fastapi
+#gke mono machine dual containers frontend/backend
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
+RUN apt-get update && apt-get install -y curl
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 WORKDIR /app
 
-# Install Backend
+# backend
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=app/backend/pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=app/backend/uv.lock,target=uv.lock \
     UV_PROJECT_ENVIRONMENT=/opt/venv-backend uv sync --frozen --no-install-project --no-dev
 
-# Install Frontend
+# frontend
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=app/frontend/pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=app/frontend/uv.lock,target=uv.lock \
     UV_PROJECT_ENVIRONMENT=/opt/venv-frontend uv sync --frozen --no-install-project --no-dev
 
-# --- Stage 2: Runtime ---
 FROM python:3.12-slim-bookworm
 WORKDIR /app
 
-# 1. Best Practice: Security (Non-root user)
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+#RUN groupadd -r appuser && useradd -r -g appuser appuser
 
-# 2. Copy environments
 COPY --from=builder /opt/venv-backend /opt/venv-backend
 COPY --from=builder /opt/venv-frontend /opt/venv-frontend
+COPY ./app /app
 
-# 3. Copy source code
-COPY --chown=appuser:appuser . .
+#COPY --chown=appuser:appuser . .
+#USER appuser
 
-USER appuser
 EXPOSE 8000
 EXPOSE 8501
 
-# This is a placeholder; your deployment.yaml will override this
-CMD ["python", "app/backend/main.py"]
-
+#CMD ["/opt/venv-backend/bin/uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+#CMD ["/opt/venv-frontend/bin/streamlit", "run", "frontend/main.py", "--server.port=8501", "--server.address=0.0.0.0"]
 

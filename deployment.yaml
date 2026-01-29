@@ -2,7 +2,8 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: frontend
+  name: frontend-deployment
+  namespace: default
 spec:
   replicas: 1
   selector:
@@ -16,11 +17,13 @@ spec:
       containers:
       - name: frontend
         image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-image:test
+        workingDir: /app
         command: ["/opt/venv-frontend/bin/streamlit"]
         args: [
           "run", 
-          "app/frontend/main.py", 
+          "frontend/main.py", 
           "--server.address", "0.0.0.0",
+          "--server.port", "8501",
           "--client.toolbarMode", "hidden"
         ]
         env:
@@ -28,11 +31,21 @@ spec:
           value: "http://backend-service:8000"
         ports:
         - containerPort: 8501
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8501
+          initialDelaySeconds: 15 
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: frontend-service
+  namespace: default
   annotations:
     # NEG for Layer 7 Load Balancing
     cloud.google.com/neg: '{"ingress": true}'
@@ -49,7 +62,8 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: backend
+  name: backend-deployment
+  namespace: default
 spec:
   replicas: 1
   selector:
@@ -63,23 +77,30 @@ spec:
       containers:
       - name: backend
         image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-image:test
-        command: ["/opt/venv-backend/bin/fastapi"]
+        command: ["/opt/venv-backend/bin/uvicorn"]
         args: [
-          "run", 
-          "app/backend/main.py",  
-          "--host", "0.0.0.0"
+          "backend.main:app",  
+          "--host", "0.0.0.0",
+          "--port", "8000"
         ]
         ports:
         - containerPort: 8000
-        resources:
-          requests:
-            cpu: 
-            memory: 
+        readinessProbe:
+          httpGet:
+            path: / 
+            port: 8000
+          initialDelaySeconds: 10 
+          periodSeconds: 10     
+          timeoutSeconds: 5     
+          successThreshold: 1
+          failureThreshold: 3   
+
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: backend-service
+  namespace: default
 spec:
   selector:
     app: backend
