@@ -1,4 +1,5 @@
 fastapi[standard]==0.128.0
 streamlit
 requests
+uv
 
