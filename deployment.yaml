@@ -1,35 +1,117 @@
-# deployment
-
+# --- FRONTEND (Streamlit) ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: sagan-deployment
+  name: frontend-deployment
   namespace: default
-  labels:
-    app: sagan-app
 spec:
-  replicas: 1 
+  replicas: 1
   selector:
     matchLabels:
-      app: sagan-app
+      app: frontend
   template:
     metadata:
       labels:
-        app: sagan-app
+        app: frontend
     spec:
       containers:
-      - name: sagan-container
+      - name: frontend
         image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-image:test
+        workingDir: /app
+        command: ["/opt/venv-frontend/bin/streamlit"]
+        args: [
+          "run", 
+          "frontend/main.py", 
+          "--server.address", "0.0.0.0",
+          "--server.port", "8501",
+          "--client.toolbarMode", "hidden"
+        ]
+        env:
+        - name: BACKEND_URL
+          value: "http://backend-service:8000"
         ports:
-        - containerPort: 8000 
+        - containerPort: 8501
         readinessProbe:
           httpGet:
-            path: /healthz 
-            port: 8000
-          initialDelaySeconds: 5
+            path: /
+            port: 8501
+          initialDelaySeconds: 15 
           periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: default
+  annotations:
+    # NEG for Layer 7 Load Balancing
+    cloud.google.com/neg: '{"ingress": true}'
+spec:
+  type: ClusterIP
+  selector:
+    app: frontend
+  ports:
+    - port: 80
+      targetPort: 8501
+---
+
+# --- BACKEND (FastAPI) ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-deployment
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+      - name: backend
+        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-image:test
+        command: ["/opt/venv-backend/bin/uvicorn"]
+        args: [
+          "backend.main:app",  
+          "--host", "0.0.0.0",
+          "--port", "8000"
+        ]
+        ports:
+        - containerPort: 8000
+        readinessProbe:
+          httpGet:
+            path: / 
+            port: 8000
+          initialDelaySeconds: 10 
+          periodSeconds: 10     
+          timeoutSeconds: 5     
+          successThreshold: 1
+          failureThreshold: 3   
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: default
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+  type: ClusterIP
 
 
+
+  
 
 
 
