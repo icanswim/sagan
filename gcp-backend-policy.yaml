@@ -1,0 +1,14 @@
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: frontend-backend-policy
+  namespace: default
+spec:
+  default:
+    sessionAffinity:
+      type: GENERATED_COOKIE
+      cookieTtlSec: 3600 # Matches the session duration
+  targetRef:
+    group: ""
+    kind: Service
+    name: frontend-service

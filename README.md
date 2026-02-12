@@ -10,6 +10,8 @@ streamlit
 
 ## workflow
 
+https://github.com/GoogleCloudPlatform/gke-networking-recipes
+
 gcloud auth login  
 create new gcloud project  
 gcloud config set project PROJECT_ID  
@@ -41,17 +43,38 @@ docker run -it --rm -p 8501:8501 --name frontend-container frontend # for testin
 
 docker push ${IMAGE_URI}  
 
+create gateway
+
+gcloud certificate-manager dns-authorizations create sagan-dns-auth --domain="app.wylderhayes.com"
+
+update dns provider
+
+gcloud certificate-manager dns-authorizations describe sagan-dns-auth
+create CNAME dns record
+gcloud certificate-manager certificates describe sagan-managed-cert
+
+gcloud certificate-manager maps create sagan-cert-map
+gcloud certificate-manager maps entries create sagan-map-entry \
+    --map=sagan-cert-map \
+    --hostname="app.wylderhayes.com" \
+    --certificates=sagan-managed-cert
+
+check ingress
+gcloud compute addresses list --global
+gcloud certificate-manager maps list
+gcloud certificate-manager maps entries list --map=sagan-cert-map
+gcloud certificate-manager certificates list
+
 gcloud services enable container.googleapis.com  
-gcloud container clusters create sagan-cluster --zone us-central1-a --num-nodes=1  
+gcloud container clusters create sagan-cluster --spot=True --machine-type=e2-medium --zone=us-central1-a --num-nodes=1  
 
 gcloud container clusters get-credentials sagan-cluster --zone us-central1-a  
 
 assemble repo  
 mkdir app  
 create deployment.yaml  
-create ingress.yaml  
-create frontend-config.yaml  
-create managed-cert.yaml  
+create gateway.yaml  
+create httproute.yaml  
 create Dockerfile  
 uv init frontend  
 uv add streamlit requests  
@@ -63,8 +86,13 @@ kubectl apply -f .
 kubectl get services  
 kubectl get pods  
 gcloud container clusters list  
-kubectl describe managedcertificate sagan-managed-cert  
-kubectl describe ingress sagan-ingress  
+ 
+gcloud certificate-manager certificates describe sagan-managed-cert
+kubectl get gateway external-http-gateway -o=jsonpath="{.status.addresses[0].value}" --watch # get gateway ip
+kubectl describe managedcertificate sagan-managed-cert 
+kubectl describe gateway sagan-gateway
+kubectl get svc frontend-service -o jsonpath='{.metadata.annotations["cloud\.google\.com/neg-status"]}' # describe negs
+
 
 kubectl rollout restart deployment sagan-deployment  
 gcloud container clusters delete sagan-cluster --zone us-central1-a  

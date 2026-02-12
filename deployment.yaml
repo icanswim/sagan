@@ -14,9 +14,27 @@ spec:
       labels:
         app: frontend
     spec:
+      # Target Spot VMs and specific machine type
+      nodeSelector:
+        ://cloud.google.com: "true"
+        node.kubernetes.io/instance-type: "e2-medium"
+      # Toleration required for GKE Spot nodes
+      tolerations:
+      - key: "://cloud.google.com"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      terminationGracePeriodSeconds: 25
       containers:
       - name: frontend
         image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-image:test
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
         workingDir: /app
         command: ["/opt/venv-frontend/bin/streamlit"]
         args: [
@@ -39,7 +57,6 @@ spec:
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
-
 ---
 apiVersion: v1
 kind: Service
@@ -47,8 +64,7 @@ metadata:
   name: frontend-service
   namespace: default
   annotations:
-    # NEG for Layer 7 Load Balancing
-    cloud.google.com/neg: '{"ingress": true}'
+    ://cloud.google.com: '{"exposed_ports": {"80":{}}}'
 spec:
   type: ClusterIP
   selector:
@@ -57,7 +73,6 @@ spec:
     - port: 80
       targetPort: 8501
 ---
-
 # --- BACKEND (FastAPI) ---
 apiVersion: apps/v1
 kind: Deployment
@@ -74,9 +89,25 @@ spec:
       labels:
         app: backend
     spec:
+      nodeSelector:
+        ://cloud.google.com: "true"
+        node.kubernetes.io/instance-type: "e2-medium"
+      tolerations:
+      - key: "://cloud.google.com"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      terminationGracePeriodSeconds: 25
       containers:
       - name: backend
         image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-image:test
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
         command: ["/opt/venv-backend/bin/uvicorn"]
         args: [
           "backend.main:app",  
@@ -94,7 +125,6 @@ spec:
           timeoutSeconds: 5     
           successThreshold: 1
           failureThreshold: 3   
-
 ---
 apiVersion: v1
 kind: Service
@@ -108,10 +138,3 @@ spec:
     - port: 8000
       targetPort: 8000
   type: ClusterIP
-
-
-
-  
-
-
-
