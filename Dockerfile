@@ -1,5 +1,7 @@
-#uv streamlit fastapi
-#gke mono machine dual container frontend/backend
+# gke sidecar pattern
+# uv streamlit frontend
+# fastapi backend
+
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
 RUN apt-get update && apt-get install -y curl
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy

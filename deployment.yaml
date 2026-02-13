@@ -16,11 +16,11 @@ spec:
     spec:
       # Target Spot VMs and specific machine type
       nodeSelector:
-        ://cloud.google.com: "true"
+        cloud.google.com: "true"
         node.kubernetes.io/instance-type: "e2-medium"
       # Toleration required for GKE Spot nodes
       tolerations:
-      - key: "://cloud.google.com"
+      - key: "cloud.google.com"
         operator: "Equal"
         value: "true"
         effect: "NoSchedule"
@@ -64,7 +64,7 @@ metadata:
   name: frontend-service
   namespace: default
   annotations:
-    ://cloud.google.com: '{"exposed_ports": {"80":{}}}'
+    cloud.google.com: '{"exposed_ports": {"80":{}}}'
 spec:
   type: ClusterIP
   selector:
@@ -90,10 +90,10 @@ spec:
         app: backend
     spec:
       nodeSelector:
-        ://cloud.google.com: "true"
+        cloud.google.com: "true"
         node.kubernetes.io/instance-type: "e2-medium"
       tolerations:
-      - key: "://cloud.google.com"
+      - key: "cloud.google.com"
         operator: "Equal"
         value: "true"
         effect: "NoSchedule"

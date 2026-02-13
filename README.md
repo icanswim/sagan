@@ -36,16 +36,17 @@ gcloud auth configure-docker us-central1-docker.pkg.dev
 docker build --pull --no-cache -t ${IMAGE_URI} .  
 docker build -t ${IMAGE_URI} .  
 
-docker build -f docker_frontend -t frontend . # for testing
-docker build -f docker_backend -t backend . # for testing
-docker run -it --rm -p 8000:8000 --name backend-container backend # for testing
-docker run -it --rm -p 8501:8501 --name frontend-container frontend # for testing
+docker build -t frontend . 
+docker build -t backend . 
+docker run -it --rm -p 8000:8000 --name backend-container backend 
+docker run -it --rm -p 8501:8501 --name frontend-container frontend 
 
 docker push ${IMAGE_URI}  
 
 create gateway
 
 gcloud certificate-manager dns-authorizations create sagan-dns-auth --domain="app.wylderhayes.com"
+gcloud certificate-manager dns-authorizations list  
 
 update dns provider
 
@@ -66,7 +67,7 @@ gcloud certificate-manager maps entries list --map=sagan-cert-map
 gcloud certificate-manager certificates list
 
 gcloud services enable container.googleapis.com  
-gcloud container clusters create sagan-cluster --spot=True --machine-type=e2-medium --zone=us-central1-a --num-nodes=1  
+gcloud container clusters create sagan-cluster --spot --machine-type=e2-medium --zone=us-central1-a --num-nodes=1  
 
 gcloud container clusters get-credentials sagan-cluster --zone us-central1-a  
 
@@ -80,9 +81,14 @@ uv init frontend
 uv add streamlit requests  
 uv init backend  
 uv add fastapi  
- 
-kubectl apply -f .  
 
+gcloud container clusters update sagan-cluster --location=us-central1-a --gateway-api=standard
+kubectl get crd | grep gateway.networking.k8s.io
+gcloud container clusters describe sagan-cluster --location=us-central1-a --format="json(networkConfig.gatewayApiConfig)"
+
+kubectl apply -f . --dry-run=server 
+
+kubectl get crds
 kubectl get services  
 kubectl get pods  
 gcloud container clusters list  
