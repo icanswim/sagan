@@ -1,11 +1,17 @@
-# --- FRONTEND (Streamlit) ---
+# gke multi-service deployment for sagan app
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sagan-app
+---
+# uv streamlit frontend
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend-deployment
-  namespace: default
+  namespace: sagan-app
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: frontend
@@ -14,20 +20,37 @@ spec:
       labels:
         app: frontend
     spec:
-      # Target Spot VMs and specific machine type
-      nodeSelector:
-        cloud.google.com: "true"
-        node.kubernetes.io/instance-type: "e2-medium"
-      # Toleration required for GKE Spot nodes
+      affinity:
+        # prefer spot nodes (affinity)
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: "cloud.google.com/gke-spot"
+                operator: In
+                values: ["true"]
+        # avoid putting two frontends on the same node (anti-affinity)
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values: ["frontend"]
+              topologyKey: "kubernetes.io/hostname"
+      # toleration required for GKE spot nodes
       tolerations:
-      - key: "cloud.google.com"
+      - key: "cloud.google.com/gke-spot"
         operator: "Equal"
         value: "true"
         effect: "NoSchedule"
       terminationGracePeriodSeconds: 25
       containers:
       - name: frontend
-        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-image:test
+        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-frontend:v1
         resources:
           requests:
             memory: "512Mi"
@@ -49,38 +72,44 @@ spec:
           value: "http://backend-service:8000"
         ports:
         - containerPort: 8501
+        livenessProbe:
+          httpGet:
+            path: /_stcore/health
+            port: 8501
+          initialDelaySeconds: 30  # give streamlit more time to initialize than readiness
+          periodSeconds: 20
+          failureThreshold: 3
         readinessProbe:
           httpGet:
-            path: /
+            path: /_stcore/health
             port: 8501
-          initialDelaySeconds: 15 
-          periodSeconds: 10
-          timeoutSeconds: 5
-          failureThreshold: 3
+          initialDelaySeconds: 15
+          periodSeconds: 10     
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: frontend-service
-  namespace: default
+  namespace: sagan-app
   annotations:
     cloud.google.com: '{"exposed_ports": {"80":{}}}'
 spec:
   type: ClusterIP
+  sessionAffinity: ClientIP # keeps the user on the same pod for their session
   selector:
     app: frontend
   ports:
     - port: 80
       targetPort: 8501
 ---
-# --- BACKEND (FastAPI) ---
+# fastapi backend
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: backend-deployment
-  namespace: default
+  namespace: sagan-app
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: backend
@@ -89,18 +118,36 @@ spec:
       labels:
         app: backend
     spec:
-      nodeSelector:
-        cloud.google.com: "true"
-        node.kubernetes.io/instance-type: "e2-medium"
+      affinity:
+        # prefer spot nodes (affinity)
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: "cloud.google.com/gke-spot"
+                operator: In
+                values: ["true"]
+        # avoid putting two backends on the same node (anti-affinity)
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values: ["backend"]
+              topologyKey: "kubernetes.io/hostname"
       tolerations:
-      - key: "cloud.google.com"
+      - key: "cloud.google.com/gke-spot"
         operator: "Equal"
         value: "true"
         effect: "NoSchedule"
       terminationGracePeriodSeconds: 25
       containers:
       - name: backend
-        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-image:test
+        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:v1
         resources:
           requests:
             memory: "512Mi"
@@ -116,21 +163,24 @@ spec:
         ]
         ports:
         - containerPort: 8000
+        livenessProbe:
+          httpGet:
+            path: /health # ensure fastapi endpoint in main 
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 20
         readinessProbe:
           httpGet:
-            path: / 
+            path: /health
             port: 8000
-          initialDelaySeconds: 10 
-          periodSeconds: 10     
-          timeoutSeconds: 5     
-          successThreshold: 1
-          failureThreshold: 3   
+          initialDelaySeconds: 5
+          periodSeconds: 10   
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: backend-service
-  namespace: default
+  namespace: sagan-app
 spec:
   selector:
     app: backend

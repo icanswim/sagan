@@ -2,7 +2,7 @@ apiVersion: networking.gke.io/v1
 kind: GCPBackendPolicy
 metadata:
   name: frontend-backend-policy
-  namespace: default
+  namespace: sagan-app
 spec:
   default:
     sessionAffinity:

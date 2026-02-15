@@ -18,9 +18,9 @@ gcloud config set project PROJECT_ID
 
 export PROJECT_ID=$(gcloud config get-value project)  
 export IMAGE_REPO_NAME=sagan-image-repo  
-export IMAGE_NAME=sagan-image  
-export IMAGE_TAG=test  
-export IMAGE_URI="us-central1-docker.pkg.dev/${PROJECT_ID}/${IMAGE_REPO_NAME}/${IMAGE_NAME}:${IMAGE_TAG}"  
+export IMAGE_TAG=v1 
+export FRONT_IMAGE_URI="us-central1-docker.pkg.dev/${PROJECT_ID}/${IMAGE_REPO_NAME}/sagan-frontend:${IMAGE_TAG}"  
+export BACK_IMAGE_URI="us-central1-docker.pkg.dev/${PROJECT_ID}/${IMAGE_REPO_NAME}/sagan-backend:${IMAGE_TAG}" 
 
 glcoud services enable compute.googleapis.com  
 gcloud compute addresses create sagan-ingress-ip --global  
@@ -28,20 +28,10 @@ gcloud compute addresses describe sagan-ingress-ip --global --format="get(addres
 create DNS redirect for app.wylderhayes.com to sagan-ingress-ip  
 
 gcloud services enable artifactregistry.googleapis.com  
-gcloud artifacts repositories create ${IMAGE_REPO_NAME} --repository-format=docker --location=us-central1 --description="gke docker fastapi"  
+gcloud artifacts repositories create ${IMAGE_REPO_NAME} --repository-format=docker --location=us-central1 --description="sagan-app"  
 set IMAGE_URI in deployment.yaml
 
 gcloud auth configure-docker us-central1-docker.pkg.dev  
-
-docker build --pull --no-cache -t ${IMAGE_URI} .  
-docker build -t ${IMAGE_URI} .  
-
-docker build -t frontend . 
-docker build -t backend . 
-docker run -it --rm -p 8000:8000 --name backend-container backend 
-docker run -it --rm -p 8501:8501 --name frontend-container frontend 
-
-docker push ${IMAGE_URI}  
 
 create gateway
 
@@ -60,7 +50,30 @@ gcloud certificate-manager maps entries create sagan-map-entry \
     --hostname="app.wylderhayes.com" \
     --certificates=sagan-managed-cert
 
-check ingress
+assemble repo  
+
+mkdir app  
+create deployment.yaml  
+create gateway.yaml  
+create httproute.yaml  
+uv init frontend  
+uv add streamlit requests  
+create Dockerfile frontend
+uv init backend  
+uv add fastapi
+create Dockerfile backend
+
+docker build -t ${FRONT_IMAGE_URI} ./frontend/Dockerfile  
+docker build -t ${BACK_IMAGE_URI} ./backend/Dockerfile  
+
+docker run -it --rm -p 8000:8000 --name backend-container backend # local testing
+docker run -it --rm -p 8501:8501 --name frontend-container frontend # local testing
+
+docker push ${FRONT_IMAGE_URI}  
+docker push ${BACK_IMAGE_URI}
+
+check io
+
 gcloud compute addresses list --global
 gcloud certificate-manager maps list
 gcloud certificate-manager maps entries list --map=sagan-cert-map
@@ -71,21 +84,11 @@ gcloud container clusters create sagan-cluster --spot --machine-type=e2-medium -
 
 gcloud container clusters get-credentials sagan-cluster --zone us-central1-a  
 
-assemble repo  
-mkdir app  
-create deployment.yaml  
-create gateway.yaml  
-create httproute.yaml  
-create Dockerfile  
-uv init frontend  
-uv add streamlit requests  
-uv init backend  
-uv add fastapi  
-
 gcloud container clusters update sagan-cluster --location=us-central1-a --gateway-api=standard
 kubectl get crd | grep gateway.networking.k8s.io
 gcloud container clusters describe sagan-cluster --location=us-central1-a --format="json(networkConfig.gatewayApiConfig)"
 
+kubectl apply -f ./
 kubectl apply -f . --dry-run=server 
 
 kubectl get crds
@@ -99,10 +102,8 @@ kubectl describe managedcertificate sagan-managed-cert
 kubectl describe gateway sagan-gateway
 kubectl get svc frontend-service -o jsonpath='{.metadata.annotations["cloud\.google\.com/neg-status"]}' # describe negs
 
-
 kubectl rollout restart deployment sagan-deployment  
 gcloud container clusters delete sagan-cluster --zone us-central1-a  
-
 
 ## instructions 
 
