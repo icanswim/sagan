@@ -21,25 +21,6 @@ spec:
     kind: Service
     name: frontend-service
 ---
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: sagan-ingress
-  namespace: sagan-app
-  annotations:
-    kubernetes.io/ingress.class: "gce" # Creates an external Application Load Balancer
-spec:
-  rules:
-  - http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: frontend-service
-            port:
-              name: http-frontend
----
 # uv streamlit frontend
 apiVersion: apps/v1
 kind: Deployment
@@ -104,6 +85,8 @@ spec:
           "--client.toolbarMode", "hidden",
           "--server.enableCORS", "false",           # required for proxy/lb access
           "--server.enableXsrfProtection", "false",  # prevents websocket resets
+          "--browser.serverAddress", "app.wylderhayes.com",
+          "--browser.serverPort", "443"
         ]
         env:
         - name: BACKEND_URL
@@ -130,9 +113,9 @@ metadata:
   name: frontend-service
   namespace: sagan-app
   annotations:
-    cloud.google.com/neg: '{"ingress": true}'
+    cloud.google.com/neg: '{"ingress":true}'
 spec:
-  type: ClusterIP
+  type: NodePort
   selector:
     app: frontend
   ports:

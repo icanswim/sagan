@@ -95,6 +95,21 @@ gcloud container clusters get-credentials sagan-cluster --zone us-central1-a
 gcloud container clusters update sagan-cluster \
     --location=us-central1-a \
     --gateway-api=standard
+
+gcloud container clusters update sagan-cluster \
+    --location=us-central1-a \
+    --workload-pool=sagan-5.svc.id.goog
+
+gcloud container node-pools update spot-pool \
+    --cluster=sagan-cluster \
+    --location=us-central1-a \
+    --workload-metadata=GKE_METADATA
+
+gcloud container node-pools update default-pool \
+    --cluster=sagan-cluster \
+    --location=us-central1-a \
+    --workload-metadata=GKE_METADATA
+
 kubectl get crd | grep gateway.networking.k8s.io
 gcloud container clusters describe sagan-cluster \
     --location=us-central1-a \
@@ -103,6 +118,8 @@ gcloud container clusters describe sagan-cluster \
 kubectl create namespace sagan-app --save-config
 kubectl apply -f gateway.yaml
 kubectl get gateway sagan-gateway -n sagan-app --watch # wait for gateway to be programmed
+kubectl describe gateway sagan-gateway -n sagan-app
+
 kubectl apply -f routes.yaml
 kubectl apply -f . --dry-run=server 
 
@@ -116,7 +133,6 @@ kubectl get gateway external-http-gateway -o=jsonpath="{.status.addresses[0].val
 kubectl describe managedcertificate sagan-managed-cert 
 kubectl describe gateway sagan-gateway
 kubectl get svc frontend-service -o jsonpath='{.metadata.annotations["cloud\.google\.com/neg-status"]}' # describe negs
-kubectl describe ingress sagan-ingress -n sagan-app
 
 kubectl rollout restart deployment sagan-deployment  
 gcloud container clusters delete sagan-cluster --zone us-central1-a  
