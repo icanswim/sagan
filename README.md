@@ -80,15 +80,28 @@ gcloud certificate-manager maps entries list --map=sagan-cert-map
 gcloud certificate-manager certificates list
 
 gcloud services enable container.googleapis.com  
-gcloud container clusters create sagan-cluster --spot --machine-type=e2-medium --zone=us-central1-a --num-nodes=1  
+gcloud container clusters create sagan-cluster --spot --zone=us-central1-a --num-nodes=2  
+
+gcloud container node-pools create spot-pool \
+    --cluster=sagan-cluster \
+    --region=us-central1-a \
+    --spot \
+    --node-taints=cloud.google.com/gke-spot="true":NoSchedule
 
 gcloud container clusters get-credentials sagan-cluster --zone us-central1-a  
 
-gcloud container clusters update sagan-cluster --location=us-central1-a --gateway-api=standard
+gcloud container clusters update sagan-cluster \
+    --location=us-central1-a \
+    --gateway-api=standard
 kubectl get crd | grep gateway.networking.k8s.io
-gcloud container clusters describe sagan-cluster --location=us-central1-a --format="json(networkConfig.gatewayApiConfig)"
-
-kubectl apply -f ./
+gcloud container clusters describe sagan-cluster \
+    --location=us-central1-a \
+    --format="json(networkConfig.gatewayApiConfig)"
+    
+kubectl create namespace sagan-app --save-config
+kubectl apply -f gateway.yaml
+kubectl get gateway sagan-gateway -n sagan-app --watch # wait for gateway to be programmed
+kubectl apply -f routes.yaml
 kubectl apply -f . --dry-run=server 
 
 kubectl get crds

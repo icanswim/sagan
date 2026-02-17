@@ -4,6 +4,23 @@ kind: Namespace
 metadata:
   name: sagan-app
 ---
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: frontend-health-check
+  namespace: sagan-app
+spec:
+  default:
+    config:
+      type: HTTP
+      httpHealthCheck:
+        port: 8501             # Point directly to the Streamlit port
+        requestPath: /_stcore/health
+  targetRef:
+    group: ""
+    kind: Service
+    name: frontend-service
+---
 # uv streamlit frontend
 apiVersion: apps/v1
 kind: Deployment
@@ -95,7 +112,6 @@ metadata:
     cloud.google.com: '{"exposed_ports": {"80":{}}}'
 spec:
   type: ClusterIP
-  sessionAffinity: ClientIP # keeps the user on the same pod for their session
   selector:
     app: frontend
   ports:
