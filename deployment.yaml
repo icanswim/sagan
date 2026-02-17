@@ -14,12 +14,31 @@ spec:
     config:
       type: HTTP
       httpHealthCheck:
-        port: 8501             # Point directly to the Streamlit port
+        port: 8501  # streamlit default port
         requestPath: /_stcore/health
   targetRef:
     group: ""
     kind: Service
     name: frontend-service
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sagan-ingress
+  namespace: sagan-app
+  annotations:
+    kubernetes.io/ingress.class: "gce" # Creates an external Application Load Balancer
+spec:
+  rules:
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: frontend-service
+            port:
+              name: http-frontend
 ---
 # uv streamlit frontend
 apiVersion: apps/v1
@@ -58,7 +77,7 @@ spec:
                   operator: In
                   values: ["frontend"]
               topologyKey: "kubernetes.io/hostname"
-      # toleration required for GKE spot nodes
+      # toleration required for gke spot nodes
       tolerations:
       - key: "cloud.google.com/gke-spot"
         operator: "Equal"
@@ -67,7 +86,7 @@ spec:
       terminationGracePeriodSeconds: 25
       containers:
       - name: frontend
-        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-frontend:v1
+        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-frontend:v2
         resources:
           requests:
             memory: "512Mi"
@@ -79,10 +98,12 @@ spec:
         command: ["/opt/venv-frontend/bin/streamlit"]
         args: [
           "run", 
-          "frontend/main.py", 
+          "main.py", 
           "--server.address", "0.0.0.0",
           "--server.port", "8501",
-          "--client.toolbarMode", "hidden"
+          "--client.toolbarMode", "hidden",
+          "--server.enableCORS", "false",           # required for proxy/lb access
+          "--server.enableXsrfProtection", "false",  # prevents websocket resets
         ]
         env:
         - name: BACKEND_URL
@@ -109,13 +130,14 @@ metadata:
   name: frontend-service
   namespace: sagan-app
   annotations:
-    cloud.google.com: '{"exposed_ports": {"80":{}}}'
+    cloud.google.com/neg: '{"ingress": true}'
 spec:
   type: ClusterIP
   selector:
     app: frontend
   ports:
-    - port: 80
+    - name: http-frontend
+      port: 80
       targetPort: 8501
 ---
 # fastapi backend
@@ -163,7 +185,7 @@ spec:
       terminationGracePeriodSeconds: 25
       containers:
       - name: backend
-        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:v1
+        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:v2
         resources:
           requests:
             memory: "512Mi"
@@ -173,7 +195,7 @@ spec:
             cpu: "500m"
         command: ["/opt/venv-backend/bin/uvicorn"]
         args: [
-          "backend.main:app",  
+          "main:app",  
           "--host", "0.0.0.0",
           "--port", "8000"
         ]

@@ -9,7 +9,7 @@ async def health_check():
 @app.get("/data")
 async def get_data():
     return {
-        "message": "Hello from the FastAPI Backend!",
+        "message": "sagan backend...🚀",
         "version": "1.0.0",
         "data": [1, 2, 3, 4, 5]
     }
