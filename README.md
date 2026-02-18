@@ -119,9 +119,18 @@ kubectl create namespace sagan-app --save-config
 kubectl apply -f gateway.yaml
 kubectl get gateway sagan-gateway -n sagan-app --watch # wait for gateway to be programmed
 kubectl describe gateway sagan-gateway -n sagan-app
-
 kubectl apply -f routes.yaml
 kubectl apply -f . --dry-run=server 
+
+gcloud compute networks subnets list --filter="purpose=REGIONAL_MANAGED_PROXY AND region:us-central1"
+gcloud compute networks list
+
+gcloud compute networks subnets create sagan-proxy-subnet \
+    --purpose=REGIONAL_MANAGED_PROXY \
+    --role=ACTIVE \
+    --region=us-central1 \
+    --network=default \
+    --range=172.16.0.0/23
 
 kubectl get crds
 kubectl get services  
