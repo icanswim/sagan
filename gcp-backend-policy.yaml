@@ -1,0 +1,15 @@
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: sagan-backend-policy
+  namespace: sagan-app
+spec:
+  default:
+    timeoutSec: 3600 # critical for streamlit websockets
+    sessionAffinity:
+      type: GENERATED_COOKIE
+      cookieTtlSec: 3600 # matches the session duration
+  targetRef:
+    group: ""
+    kind: Service
+    name: frontend-service

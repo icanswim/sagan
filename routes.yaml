@@ -1,0 +1,37 @@
+# http to https redirect
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: sagan-redirect-route
+  namespace: sagan-app
+spec:
+  parentRefs:
+  - name: sagan-gateway
+    sectionName: http    
+  hostnames:
+  - "app.wylderhayes.com"
+  rules:
+  - filters:
+    - type: RequestRedirect
+      requestRedirect:
+        scheme: https
+        statusCode: 301
+---
+# main https route
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: sagan-https-route
+  namespace: sagan-app
+spec:
+  parentRefs:
+  - name: sagan-gateway
+    sectionName: https  
+  hostnames:
+  - "app.wylderhayes.com"
+  rules:
+  - matches:
+    - path: { type: PathPrefix, value: / }
+    backendRefs:
+    - name: frontend-service
+      port: 80

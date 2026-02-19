@@ -1,11 +1,34 @@
-# --- FRONTEND (Streamlit) ---
+# gke multi-service deployment for sagan app
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sagan-app
+---
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: frontend-health-check
+  namespace: sagan-app
+spec:
+  default:
+    config:
+      type: HTTP
+      httpHealthCheck:
+        port: 8501  # streamlit default port
+        requestPath: /_stcore/health
+  targetRef:
+    group: ""
+    kind: Service
+    name: frontend-service
+---
+# uv streamlit frontend
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend-deployment
-  namespace: default
+  namespace: sagan-app
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: frontend
@@ -14,58 +37,99 @@ spec:
       labels:
         app: frontend
     spec:
+      # workload identity
+      serviceAccountName: sagan-frontend-ksa
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: "cloud.google.com/gke-spot"
+                operator: In
+                values: ["true"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values: ["frontend"]
+              topologyKey: "kubernetes.io/hostname"
+      tolerations:
+      - key: "cloud.google.com/gke-spot"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      terminationGracePeriodSeconds: 25
       containers:
       - name: frontend
-        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-image:test
+        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-frontend:v2
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
         workingDir: /app
         command: ["/opt/venv-frontend/bin/streamlit"]
         args: [
           "run", 
-          "frontend/main.py", 
+          "main.py", 
           "--server.address", "0.0.0.0",
           "--server.port", "8501",
-          "--client.toolbarMode", "hidden"
+          "--client.toolbarMode", "hidden",
+          "--server.enableCORS", "false",
+          "--server.enableXsrfProtection", "false",
+          "--browser.serverAddress", "app.wylderhayes.com",
+          "--browser.serverPort", "443"
         ]
         env:
         - name: BACKEND_URL
           value: "http://backend-service:8000"
         ports:
         - containerPort: 8501
+        livenessProbe:
+          httpGet:
+            path: /_stcore/health
+            port: 8501
+          initialDelaySeconds: 30
+          periodSeconds: 20
+          failureThreshold: 3
         readinessProbe:
           httpGet:
-            path: /
+            path: /_stcore/health
             port: 8501
-          initialDelaySeconds: 15 
-          periodSeconds: 10
-          timeoutSeconds: 5
-          failureThreshold: 3
-
+          initialDelaySeconds: 15
+          periodSeconds: 10     
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: frontend-service
-  namespace: default
+  namespace: sagan-app
   annotations:
-    # NEG for Layer 7 Load Balancing
-    cloud.google.com/neg: '{"ingress": true}'
+    cloud.google.com/neg: '{"ingress":true}'
 spec:
-  type: ClusterIP
+  type: NodePort
   selector:
     app: frontend
   ports:
-    - port: 80
+    - name: http-frontend
+      port: 80
       targetPort: 8501
 ---
-
-# --- BACKEND (FastAPI) ---
+# fastapi backend
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: backend-deployment
-  namespace: default
+  namespace: sagan-app
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: backend
@@ -74,44 +138,73 @@ spec:
       labels:
         app: backend
     spec:
+      # workload identity
+      serviceAccountName: default
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: "cloud.google.com/gke-spot"
+                operator: In
+                values: ["true"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values: ["backend"]
+              topologyKey: "kubernetes.io/hostname"
+      tolerations:
+      - key: "cloud.google.com/gke-spot"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      terminationGracePeriodSeconds: 25
       containers:
       - name: backend
-        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-image:test
+        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:v2
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
         command: ["/opt/venv-backend/bin/uvicorn"]
         args: [
-          "backend.main:app",  
+          "main:app",  
           "--host", "0.0.0.0",
           "--port", "8000"
         ]
         ports:
         - containerPort: 8000
+        livenessProbe:
+          httpGet:
+            path: /health 
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 20
         readinessProbe:
           httpGet:
-            path: / 
+            path: /health
             port: 8000
-          initialDelaySeconds: 10 
-          periodSeconds: 10     
-          timeoutSeconds: 5     
-          successThreshold: 1
-          failureThreshold: 3   
-
+          initialDelaySeconds: 5
+          periodSeconds: 10   
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: backend-service
-  namespace: default
+  namespace: sagan-app
 spec:
   selector:
     app: backend
   ports:
     - port: 8000
       targetPort: 8000
-  type: ClusterIP
-
-
-
-  
-
-
-
+  type: ClusterIP # Changed to ClusterIP as it is internal only
