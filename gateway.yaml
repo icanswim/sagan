@@ -24,8 +24,8 @@ spec:
     hostname: "app.wylderhayes.com"
     tls:
       mode: Terminate
-      options:
-        networking.gke.io/certmap: sagan-cert-map
+      certificateRefs:
+      - name: sagan-cert-map
     allowedRoutes:
       namespaces:
         from: Same

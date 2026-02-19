@@ -132,6 +132,29 @@ gcloud compute networks subnets create sagan-proxy-subnet \
     --network=default \
     --range=172.16.0.0/23
 
+gateway api requires a secret in the certificateRefs section of gateway.yaml. 
+otherwise it throws the GWCER102 error.  creating a dummy secret 
+with the same name as your cert map satisfies the validator.  gke's 
+backend controller automatically swaps the dummy for the real sagan-cert-map.
+
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /tmp/tls.key -out /tmp/tls.crt \
+  -subj "/CN=app.wylderhayes.com"
+
+kubectl create secret tls sagan-cert-map \
+  -n sagan-app \
+  --cert=/tmp/tls.crt \
+  --key=/tmp/tls.key
+
+gcloud compute firewall-rules create allow-gke-gw-frontend-hc \
+    --network=default \
+    --action=ALLOW \
+    --direction=INGRESS \
+    --source-ranges=130.211.0.0/22,35.191.0.0/16 \
+    --rules=tcp:8501
+
+kubectl describe gateway sagan-gateway -n sagan-app
+
 kubectl get crds
 kubectl get services  
 kubectl get pods  
@@ -142,6 +165,28 @@ kubectl get gateway external-http-gateway -o=jsonpath="{.status.addresses[0].val
 kubectl describe managedcertificate sagan-managed-cert 
 kubectl describe gateway sagan-gateway
 kubectl get svc frontend-service -o jsonpath='{.metadata.annotations["cloud\.google\.com/neg-status"]}' # describe negs
+
+kubectl create serviceaccount sagan-backend-ksa
+gcloud iam service-accounts create sagan-backend-gsa \
+    --display-name="Sagan Backend Service Account"
+gcloud projects add-iam-policy-binding sagan-5 \
+    --member="serviceAccount:sagan-backend-gsa@sagan-5.iam.gserviceaccount.com" \
+    --role="roles/storage.objectViewer"
+gcloud iam service-accounts add-iam-policy-binding sagan-backend-gsa@sagan-5.iam.gserviceaccount.com \
+    --role="roles/iam.workloadIdentityUser" \
+    --member="serviceAccount:sagan-5.svc.id.goog[default/sagan-backend-ksa]"
+
+kubectl create serviceaccount sagan-frontend-ksa -n sagan-app
+gcloud iam service-accounts create sagan-frontend-gsa \
+    --project=sagan-5 \
+    --display-name="Sagan Frontend Service Account"
+gcloud iam service-accounts add-iam-policy-binding sagan-frontend-gsa@sagan-5.iam.gserviceaccount.com \
+    --role="roles/iam.workloadIdentityUser" \
+    --member="serviceAccount:sagan-5.svc.id.goog[sagan-app/sagan-frontend-ksa]"
+
+kubectl annotate serviceaccount sagan-frontend-ksa \
+    --namespace sagan-app \
+    iam.gke.io/gcp-service-account=sagan-frontend-gsa@sagan-5.iam.gserviceaccount.com
 
 kubectl rollout restart deployment sagan-deployment  
 gcloud container clusters delete sagan-cluster --zone us-central1-a  

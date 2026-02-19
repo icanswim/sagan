@@ -37,8 +37,9 @@ spec:
       labels:
         app: frontend
     spec:
+      # workload identity
+      serviceAccountName: sagan-frontend-ksa
       affinity:
-        # prefer spot nodes (affinity)
         nodeAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
           - weight: 100
@@ -47,7 +48,6 @@ spec:
               - key: "cloud.google.com/gke-spot"
                 operator: In
                 values: ["true"]
-        # avoid putting two frontends on the same node (anti-affinity)
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
           - weight: 100
@@ -58,7 +58,6 @@ spec:
                   operator: In
                   values: ["frontend"]
               topologyKey: "kubernetes.io/hostname"
-      # toleration required for gke spot nodes
       tolerations:
       - key: "cloud.google.com/gke-spot"
         operator: "Equal"
@@ -83,8 +82,8 @@ spec:
           "--server.address", "0.0.0.0",
           "--server.port", "8501",
           "--client.toolbarMode", "hidden",
-          "--server.enableCORS", "false",           # required for proxy/lb access
-          "--server.enableXsrfProtection", "false",  # prevents websocket resets
+          "--server.enableCORS", "false",
+          "--server.enableXsrfProtection", "false",
           "--browser.serverAddress", "app.wylderhayes.com",
           "--browser.serverPort", "443"
         ]
@@ -97,7 +96,7 @@ spec:
           httpGet:
             path: /_stcore/health
             port: 8501
-          initialDelaySeconds: 30  # give streamlit more time to initialize than readiness
+          initialDelaySeconds: 30
           periodSeconds: 20
           failureThreshold: 3
         readinessProbe:
@@ -139,8 +138,9 @@ spec:
       labels:
         app: backend
     spec:
+      # workload identity
+      serviceAccountName: default
       affinity:
-        # prefer spot nodes (affinity)
         nodeAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
           - weight: 100
@@ -149,7 +149,6 @@ spec:
               - key: "cloud.google.com/gke-spot"
                 operator: In
                 values: ["true"]
-        # avoid putting two backends on the same node (anti-affinity)
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
           - weight: 100
@@ -186,7 +185,7 @@ spec:
         - containerPort: 8000
         livenessProbe:
           httpGet:
-            path: /health # ensure fastapi endpoint in main 
+            path: /health 
             port: 8000
           initialDelaySeconds: 15
           periodSeconds: 20
@@ -208,4 +207,4 @@ spec:
   ports:
     - port: 8000
       targetPort: 8000
-  type: ClusterIP
+  type: ClusterIP # Changed to ClusterIP as it is internal only
