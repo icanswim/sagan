@@ -37,10 +37,9 @@ spec:
       labels:
         app: frontend
     spec:
-      # workload identity
       serviceAccountName: sagan-frontend-ksa
       nodeSelector:
-        cloud.google.com/gke-nodepool: default-pool
+        cloud.google.com/gke-nodepool: "default-pool"
       containers:
       - name: frontend
         image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-frontend:v2
@@ -115,10 +114,9 @@ spec:
       labels:
         app: backend
     spec:
-      # workload identity
       serviceAccountName: sagan-backend-ksa
       affinity:
-        nodeAffinity: # prefer backend to be scheduled on spot nodes
+        nodeAffinity: 
           preferredDuringSchedulingIgnoredDuringExecution:
           - weight: 100
             preference:
