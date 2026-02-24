@@ -40,7 +40,7 @@ spec:
       # workload identity
       serviceAccountName: sagan-frontend-ksa
       nodeSelector:
-        cloud.google.com: default-pool 
+        cloud.google.com/gke-nodepool: default-pool
       containers:
       - name: frontend
         image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-frontend:v2
