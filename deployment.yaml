@@ -39,31 +39,8 @@ spec:
     spec:
       # workload identity
       serviceAccountName: sagan-frontend-ksa
-      affinity:
-        nodeAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            preference:
-              matchExpressions:
-              - key: "cloud.google.com/gke-spot"
-                operator: In
-                values: ["true"]
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            podAffinityTerm:
-              labelSelector:
-                matchExpressions:
-                - key: app
-                  operator: In
-                  values: ["frontend"]
-              topologyKey: "kubernetes.io/hostname"
-      tolerations:
-      - key: "cloud.google.com/gke-spot"
-        operator: "Equal"
-        value: "true"
-        effect: "NoSchedule"
-      terminationGracePeriodSeconds: 25
+      nodeSelector:
+        cloud.google.com: default-pool 
       containers:
       - name: frontend
         image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-frontend:v2
@@ -139,9 +116,9 @@ spec:
         app: backend
     spec:
       # workload identity
-      serviceAccountName: default
+      serviceAccountName: sagan-backend-ksa
       affinity:
-        nodeAffinity:
+        nodeAffinity: # prefer backend to be scheduled on spot nodes
           preferredDuringSchedulingIgnoredDuringExecution:
           - weight: 100
             preference:
@@ -149,7 +126,7 @@ spec:
               - key: "cloud.google.com/gke-spot"
                 operator: In
                 values: ["true"]
-        podAntiAffinity:
+        podAntiAffinity: # prefer backend pods to be scheduled on different nodes
           preferredDuringSchedulingIgnoredDuringExecution:
           - weight: 100
             podAffinityTerm:
@@ -159,7 +136,7 @@ spec:
                   operator: In
                   values: ["backend"]
               topologyKey: "kubernetes.io/hostname"
-      tolerations:
+      tolerations: # allow backend to be scheduled on spot nodes
       - key: "cloud.google.com/gke-spot"
         operator: "Equal"
         value: "true"
