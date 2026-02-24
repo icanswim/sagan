@@ -158,6 +158,7 @@ kubectl describe gateway sagan-gateway -n sagan-app
 kubectl get crds
 kubectl get services  
 kubectl get pods  
+kubectl get pods -n sagan-app -o wide -w
 gcloud container clusters list  
 
 check the gateway 
@@ -187,6 +188,9 @@ gcloud iam service-accounts add-iam-policy-binding sagan-frontend-gsa@sagan-5.ia
 kubectl annotate serviceaccount sagan-frontend-ksa \
     --namespace sagan-app \
     iam.gke.io/gcp-service-account=sagan-frontend-gsa@sagan-5.iam.gserviceaccount.com
+
+kubectl patch deployment kube-dns -n kube-system -p \
+'{"spec":{"template":{"spec":{"nodeSelector":{"cloud.google.com/gke-nodepool":"default-pool"}}}}}'
 
 kubectl rollout restart deployment sagan-deployment  
 gcloud container clusters delete sagan-cluster --zone us-central1-a  
