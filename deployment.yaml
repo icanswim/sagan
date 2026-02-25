@@ -39,7 +39,12 @@ spec:
     spec:
       serviceAccountName: sagan-frontend-ksa
       nodeSelector:
-        cloud.google.com/gke-nodepool: "default-pool"
+        cloud.google.com/gke-nodepool: "spot-frontend-pool"
+      tolerations:
+      - key: "dedicated"
+        operator: "Equal"
+        value: "spot"
+        effect: "NoSchedule"
       containers:
       - name: frontend
         image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-frontend:v2
@@ -105,7 +110,7 @@ metadata:
   name: backend-deployment
   namespace: sagan-app
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: backend
@@ -115,29 +120,12 @@ spec:
         app: backend
     spec:
       serviceAccountName: sagan-backend-ksa
-      affinity:
-        nodeAffinity: 
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            preference:
-              matchExpressions:
-              - key: "cloud.google.com/gke-spot"
-                operator: In
-                values: ["true"]
-        podAntiAffinity: # prefer backend pods to be scheduled on different nodes
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            podAffinityTerm:
-              labelSelector:
-                matchExpressions:
-                - key: app
-                  operator: In
-                  values: ["backend"]
-              topologyKey: "kubernetes.io/hostname"
-      tolerations: # allow backend to be scheduled on spot nodes
-      - key: "cloud.google.com/gke-spot"
+      nodeSelector:
+        cloud.google.com/gke-nodepool: "spot-backend-pool"
+      tolerations: 
+      - key: "dedicated"
         operator: "Equal"
-        value: "true"
+        value: "spot"
         effect: "NoSchedule"
       terminationGracePeriodSeconds: 25
       containers:
@@ -182,4 +170,4 @@ spec:
   ports:
     - port: 8000
       targetPort: 8000
-  type: ClusterIP # Changed to ClusterIP as it is internal only
+  type: ClusterIP 
