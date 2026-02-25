@@ -152,21 +152,6 @@ gcloud container node-pools create spot-backend-pool \
 
 kubectl apply -f gateway.yaml
 
-kubectl get gateway sagan-gateway -n sagan-app --watch # wait for gateway to be programmed
-kubectl describe gateway sagan-gateway -n sagan-app
-kubectl apply -f routes.yaml
-kubectl apply -f . --dry-run=server 
-
-gcloud compute networks subnets list --filter="purpose=REGIONAL_MANAGED_PROXY AND region:us-central1"
-gcloud compute networks list
-
-gcloud compute networks subnets create sagan-proxy-subnet \
-    --purpose=REGIONAL_MANAGED_PROXY \
-    --role=ACTIVE \
-    --region=us-central1 \
-    --network=default \
-    --range=172.16.0.0/23
-
 gateway api requires a secret in the certificateRefs section of gateway.yaml. 
 otherwise it throws the GWCER102 error.  creating a dummy secret 
 with the same name as your cert map satisfies the validator.  gke's 
@@ -181,6 +166,13 @@ kubectl create secret tls sagan-cert-map \
   --cert=/tmp/tls.crt \
   --key=/tmp/tls.key
 
+gcloud compute networks subnets create sagan-proxy-subnet \
+    --purpose=REGIONAL_MANAGED_PROXY \
+    --role=ACTIVE \
+    --region=us-central1 \
+    --network=default \
+    --range=172.16.0.0/23
+
 gcloud compute firewall-rules create allow-gke-gw-frontend-hc \
     --network=default \
     --action=ALLOW \
@@ -188,6 +180,13 @@ gcloud compute firewall-rules create allow-gke-gw-frontend-hc \
     --source-ranges=130.211.0.0/22,35.191.0.0/16 \
     --rules=tcp:8501
 
+kubectl get gateway sagan-gateway -n sagan-app --watch # wait for gateway to be programmed
+kubectl describe gateway sagan-gateway -n sagan-app
+kubectl apply -f routes.yaml
+kubectl apply -f . --dry-run=server 
+
+gcloud compute networks subnets list --filter="purpose=REGIONAL_MANAGED_PROXY AND region:us-central1"
+gcloud compute networks list
 kubectl describe gateway sagan-gateway -n sagan-app
 
 kubectl get crds

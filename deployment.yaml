@@ -127,6 +127,8 @@ spec:
         operator: "Equal"
         value: "spot"
         effect: "NoSchedule"
+      securityContext:
+        fsGroup: 2000 
       terminationGracePeriodSeconds: 25
       containers:
       - name: backend
@@ -139,13 +141,12 @@ spec:
             memory: "1Gi"
             cpu: "500m"
         command: ["/opt/venv-backend/bin/uvicorn"]
-        args: [
-          "main:app",  
-          "--host", "0.0.0.0",
-          "--port", "8000"
-        ]
+        args: ["main:app", "--host", "0.0.0.0", "--port", "8000"]
         ports:
         - containerPort: 8000
+        volumeMounts:
+        - mountPath: "/app/data" 
+          name: local-storage-volume
         livenessProbe:
           httpGet:
             path: /health 
@@ -158,6 +159,10 @@ spec:
             port: 8000
           initialDelaySeconds: 5
           periodSeconds: 10   
+      volumes:
+      - name: local-storage-volume
+        persistentVolumeClaim:
+          claimName: sagan-pvc
 ---
 apiVersion: v1
 kind: Service
