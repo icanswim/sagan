@@ -104,6 +104,10 @@ gcloud projects add-iam-policy-binding sagan-5 \
     --member="serviceAccount:sagan-gsa@sagan-5.iam.gserviceaccount.com" \
     --role="roles/storage.objectViewer"
 
+gcloud projects add-iam-policy-binding sagan-5 \
+    --member="serviceAccount:sagan-gsa@sagan-5.iam.gserviceaccount.com" \
+    --role="roles/artifactregistry.reader"
+
 kubectl create serviceaccount sagan-backend-ksa -n sagan-app
 
 gcloud iam service-accounts add-iam-policy-binding sagan-gsa@sagan-5.iam.gserviceaccount.com \
@@ -194,13 +198,9 @@ kubectl get services
 kubectl get pods  
 kubectl get pods -n sagan-app -o wide -w
 gcloud container clusters list  
-
-check the gateway 
 kubectl get gateway external-http-gateway -o=jsonpath="{.status.addresses[0].value}" --watch # get gateway ip
 kubectl describe managedcertificate sagan-managed-cert 
-kubectl describe gateway sagan-gateway
 kubectl get svc frontend-service -o jsonpath='{.metadata.annotations["cloud\.google\.com/neg-status"]}' # describe negs
-
 
 kubectl rollout restart deployment sagan-deployment  
 gcloud container clusters delete sagan-cluster --zone us-central1-a  
