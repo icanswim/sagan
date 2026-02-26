@@ -28,7 +28,7 @@ metadata:
   name: frontend-deployment
   namespace: sagan-app
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: frontend
@@ -37,33 +37,14 @@ spec:
       labels:
         app: frontend
     spec:
-      # workload identity
       serviceAccountName: sagan-frontend-ksa
-      affinity:
-        nodeAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            preference:
-              matchExpressions:
-              - key: "cloud.google.com/gke-spot"
-                operator: In
-                values: ["true"]
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            podAffinityTerm:
-              labelSelector:
-                matchExpressions:
-                - key: app
-                  operator: In
-                  values: ["frontend"]
-              topologyKey: "kubernetes.io/hostname"
+      nodeSelector:
+        cloud.google.com/gke-nodepool: "spot-frontend-pool"
       tolerations:
-      - key: "cloud.google.com/gke-spot"
+      - key: "dedicated"
         operator: "Equal"
-        value: "true"
+        value: "spot"
         effect: "NoSchedule"
-      terminationGracePeriodSeconds: 25
       containers:
       - name: frontend
         image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-frontend:v2
@@ -129,7 +110,7 @@ metadata:
   name: backend-deployment
   namespace: sagan-app
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: backend
@@ -138,32 +119,16 @@ spec:
       labels:
         app: backend
     spec:
-      # workload identity
-      serviceAccountName: default
-      affinity:
-        nodeAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            preference:
-              matchExpressions:
-              - key: "cloud.google.com/gke-spot"
-                operator: In
-                values: ["true"]
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            podAffinityTerm:
-              labelSelector:
-                matchExpressions:
-                - key: app
-                  operator: In
-                  values: ["backend"]
-              topologyKey: "kubernetes.io/hostname"
-      tolerations:
-      - key: "cloud.google.com/gke-spot"
+      serviceAccountName: sagan-backend-ksa
+      nodeSelector:
+        cloud.google.com/gke-nodepool: "spot-backend-pool"
+      tolerations: 
+      - key: "dedicated"
         operator: "Equal"
-        value: "true"
+        value: "spot"
         effect: "NoSchedule"
+      securityContext:
+        fsGroup: 2000 
       terminationGracePeriodSeconds: 25
       containers:
       - name: backend
@@ -176,13 +141,12 @@ spec:
             memory: "1Gi"
             cpu: "500m"
         command: ["/opt/venv-backend/bin/uvicorn"]
-        args: [
-          "main:app",  
-          "--host", "0.0.0.0",
-          "--port", "8000"
-        ]
+        args: ["main:app", "--host", "0.0.0.0", "--port", "8000"]
         ports:
         - containerPort: 8000
+        volumeMounts:
+        - mountPath: "/app/data" 
+          name: local-storage-volume
         livenessProbe:
           httpGet:
             path: /health 
@@ -195,6 +159,10 @@ spec:
             port: 8000
           initialDelaySeconds: 5
           periodSeconds: 10   
+      volumes:
+      - name: local-storage-volume
+        persistentVolumeClaim:
+          claimName: sagan-pvc
 ---
 apiVersion: v1
 kind: Service
@@ -207,4 +175,4 @@ spec:
   ports:
     - port: 8000
       targetPort: 8000
-  type: ClusterIP # Changed to ClusterIP as it is internal only
+  type: ClusterIP 

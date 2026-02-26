@@ -13,13 +13,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM python:3.12-slim-bookworm
 WORKDIR /app
 
-#RUN groupadd -r appuser && useradd -r -g appuser appuser
+RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 COPY --from=builder /opt/venv-frontend /opt/venv-frontend
 COPY . .
 
-#COPY --chown=appuser:appuser . .
-#USER appuser
+COPY --chown=appuser:appuser . .
+USER appuser
 
 EXPOSE 8501
 
