@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+import torch
 
 app = FastAPI()
 
@@ -11,5 +12,5 @@ async def get_data():
     return {
         "message": "sagan backend...🚀",
         "version": "1.0.0",
-        "data": [1, 2, 3, 4, 5]
+        "torch.__version__": torch.__version__
     }

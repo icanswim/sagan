@@ -18,7 +18,7 @@ gcloud config set project PROJECT_ID
 
 export PROJECT_ID=$(gcloud config get-value project)  
 export IMAGE_REPO_NAME=sagan-image-repo  
-export IMAGE_TAG=v2 
+export IMAGE_TAG=sagan_engine
 export FRONT_IMAGE_URI="us-central1-docker.pkg.dev/${PROJECT_ID}/${IMAGE_REPO_NAME}/sagan-frontend:${IMAGE_TAG}"  
 export BACK_IMAGE_URI="us-central1-docker.pkg.dev/${PROJECT_ID}/${IMAGE_REPO_NAME}/sagan-backend:${IMAGE_TAG}" 
 
@@ -72,8 +72,8 @@ create Dockerfile backend
 docker build -t ${FRONT_IMAGE_URI} ./app/frontend
 docker build -t ${BACK_IMAGE_URI} ./app/backend
 
-docker run -it --rm -p 8000:8000 --name backend-container backend # local testing
-docker run -it --rm -p 8501:8501 --name frontend-container frontend # local testing
+docker run -it --rm -p 8000:8000 --name backend-container ${BACK_IMAGE_URI} # local testing
+docker run -it --rm -p 8501:8501 --name frontend-container ${FRONT_IMAGE_URI} # local testing
 
 docker push ${FRONT_IMAGE_URI}  
 docker push ${BACK_IMAGE_URI}

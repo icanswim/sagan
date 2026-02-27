@@ -16,13 +16,11 @@ WORKDIR /app
 RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 COPY --from=builder /opt/venv-backend /opt/venv-backend
-COPY . .
-
 COPY --chown=appuser:appuser . .
-USER appuser
 
+USER appuser
 EXPOSE 8000
 
-#CMD ["/opt/venv-backend/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/opt/venv-backend/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 

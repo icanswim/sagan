@@ -132,14 +132,14 @@ spec:
       terminationGracePeriodSeconds: 25
       containers:
       - name: backend
-        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:v2
+        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:sagan-engine
         resources:
           requests:
-            memory: "512Mi"
-            cpu: "250m"
+            memory: "2Gi"
+            cpu: "1000m"
           limits:
-            memory: "1Gi"
-            cpu: "500m"
+            memory: "4Gi"
+            cpu: "2000m"
         command: ["/opt/venv-backend/bin/uvicorn"]
         args: ["main:app", "--host", "0.0.0.0", "--port", "8000"]
         ports:

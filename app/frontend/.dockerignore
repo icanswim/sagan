@@ -1,0 +1,36 @@
+# Python artifacts
+**/__pycache__/
+**/*.py[cod]
+**/*$py.class
+.pytest_cache/
+.coverage
+.mypy_cache/
+
+# Local environments (CRITICAL: prevents copying local GPU libs)
+.venv/
+venv/
+env/
+ENV/
+
+# Build and distribution
+dist/
+build/
+*.egg-info/
+
+# Project metadata
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+.DS_Store
+
+# uv specific
+.uv/
+
+# Local Data/Logs (if applicable)
+data/
+logs/
+*.log
+*.sqlite
+
