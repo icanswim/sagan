@@ -18,7 +18,7 @@ gcloud config set project PROJECT_ID
 
 export PROJECT_ID=$(gcloud config get-value project)  
 export IMAGE_REPO_NAME=sagan-image-repo  
-export IMAGE_TAG=sagan_engine
+export IMAGE_TAG=v3
 export FRONT_IMAGE_URI="us-central1-docker.pkg.dev/${PROJECT_ID}/${IMAGE_REPO_NAME}/sagan-frontend:${IMAGE_TAG}"  
 export BACK_IMAGE_URI="us-central1-docker.pkg.dev/${PROJECT_ID}/${IMAGE_REPO_NAME}/sagan-backend:${IMAGE_TAG}" 
 
@@ -153,6 +153,21 @@ gcloud container node-pools create spot-backend-pool \
     --service-account=sagan-gsa@sagan-5.iam.gserviceaccount.com \
     --num-nodes 1 \
     --workload-metadata=GKE_METADATA
+
+gcloud container clusters update sagan-cluster \
+    --update-addons GcsFuseCsiDriver=ENABLED \
+    --location=us-central1-a 
+gcloud container clusters describe sagan-cluster \
+    --location us-central1-a \
+    --format="value(config.addonsConfig.gcsFuseCsiDriverConfig.enabled)"
+gcloud storage buckets create gs://sagan-bucket \
+    --location=us-central1 \
+    --uniform-bucket-level-access \
+    --enable-hierarchical-namespace
+gcloud storage buckets add-iam-policy-binding gs://sagan-bucket \
+    --member="serviceAccount:pytorch-bucket-sa@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+    --role="roles/storage.objectUser"
+kubectl get daemonset gcs-fuse-csi-driver -n kube-system
 
 kubectl apply -f gateway.yaml
 

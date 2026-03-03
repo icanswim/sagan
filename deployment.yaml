@@ -118,6 +118,8 @@ spec:
     metadata:
       labels:
         app: backend
+      annotations:
+        gke-gcsview.io/volumes: "true"
     spec:
       serviceAccountName: sagan-backend-ksa
       nodeSelector:
@@ -128,11 +130,13 @@ spec:
         value: "spot"
         effect: "NoSchedule"
       securityContext:
-        fsGroup: 2000 
+        fsGroup: 999
+        runAsUser: 999
+        runAsGroup: 999 
       terminationGracePeriodSeconds: 25
       containers:
       - name: backend
-        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:sagan-engine
+        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:v3
         resources:
           requests:
             memory: "2Gi"
@@ -146,7 +150,7 @@ spec:
         - containerPort: 8000
         volumeMounts:
         - mountPath: "/app/data" 
-          name: local-storage-volume
+          name: fuse-volume
         livenessProbe:
           httpGet:
             path: /health 
@@ -160,9 +164,12 @@ spec:
           initialDelaySeconds: 5
           periodSeconds: 10   
       volumes:
-      - name: local-storage-volume
-        persistentVolumeClaim:
-          claimName: sagan-pvc
+      - name: fuse-volume
+        csi:
+          driver: gcsfuse.csi.storage.gke.io
+          volumeAttributes:
+            bucketName: sagan-bucket
+            mountOptions: "uid=999,gid=999" 
 ---
 apiVersion: v1
 kind: Service

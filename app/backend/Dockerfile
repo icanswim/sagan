@@ -11,9 +11,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     UV_PROJECT_ENVIRONMENT=/opt/venv-backend uv sync --frozen --no-install-project --no-dev
 
 FROM python:3.12-slim-bookworm
-WORKDIR /app
 
 RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+WORKDIR /app/data
+WORKDIR /app
+
+RUN mkdir -p /app/data && chown -R appuser:appuser /app/data
 
 COPY --from=builder /opt/venv-backend /opt/venv-backend
 COPY --chown=appuser:appuser . .
