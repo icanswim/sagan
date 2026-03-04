@@ -169,6 +169,10 @@ gcloud storage buckets add-iam-policy-binding gs://sagan-bucket \
     --role="roles/storage.objectUser"
 kubectl get daemonset gcs-fuse-csi-driver -n kube-system
 
+gcloud storage buckets update gs://sagan-bucket --lifecycle-file=lifecycle.json
+gcloud storage buckets describe gs://sagan-bucket --format="json(lifecycle)"
+
+
 kubectl apply -f gateway.yaml
 
 gateway api requires a secret in the certificateRefs section of gateway.yaml. 

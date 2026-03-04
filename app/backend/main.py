@@ -1,8 +1,7 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, HTTPException, status
-
-import torch
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import StreamingResponse
 
 from cosmosis.dataset import AsTensor 
 from gpt.dataset import TinyShakes
@@ -23,15 +22,15 @@ async def lifespan(app: FastAPI):
                                 #'n': 1000,
                                 }}
 
-    model_param = {'d_model': d_model,
-                'd_vocab': d_vocab, 
-                'n_head': 6, 
-                'num_layers': 6,
-                'd_seq': d_seq,
-                'd_vec': d_vec,
-                'embed_param': {'tokens': (d_vocab, d_vec, None, True), 
-                                'y': (d_vocab, d_vec, None, True),
-                                'position': (d_seq, d_vec, None, True)}} 
+    app.state.model_param = {'d_model': d_model,
+                            'd_vocab': d_vocab, 
+                            'n_head': 6, 
+                            'num_layers': 6,
+                            'd_seq': d_seq,
+                            'd_vec': d_vec,
+                            'embed_param': {'tokens': (d_vocab, d_vec, None, True), 
+                                            'y': (d_vocab, d_vec, None, True),
+                                            'position': (d_seq, d_vec, None, True)}} 
                                         
     metrics_param = {'metric_name': 'transformer',
                     'report_interval': 1,
@@ -56,7 +55,7 @@ async def lifespan(app: FastAPI):
                             Optimizer=Adam, 
                             Scheduler=ReduceLROnPlateau, 
                             Criterion=CrossEntropyLoss,
-                            model_param=model_param, ds_param=ds_param, sample_param=sample_param,
+                            model_param=app.state.model_param, ds_param=ds_param, sample_param=sample_param,
                             opt_param=opt_param, sched_param=sched_param, crit_param=crit_param,
                             metrics_param=metrics_param, 
                             batch_size=32, epochs=1, gpu=True, save_model='tinyshakes384', 
@@ -70,11 +69,18 @@ app = FastAPI(lifespan=lifespan)
 async def health_check():
     return {"status": "healthy", "service": "sagan-backend"}
 
-@app.get("/data")
+@app.get("/logs")
 async def read_data(request: Request):
-    ds = request.app.state.data
+    file_path = "/data/"
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found in bucket")
+    
+    # Standard synchronous read (works because FUSE handles the API calls)
+    with open(file_path, "r") as f:
+        content = f.read()
 
-    return {}
+    return {'content': content}
 
 @app.post("/prompt")
 async def handle_text(prompt: TextData):
