@@ -1,105 +1,58 @@
+import torch
+import threading
 from contextlib import asynccontextmanager
-
+from pathlib import Path
+from anyio.to_thread import run_sync
+from pydantic import BaseModel
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import StreamingResponse
+
+from torch.optim import Adam
+from torch.nn import CrossEntropyLoss
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from cosmosis.dataset import AsTensor 
 from gpt.dataset import TinyShakes
+from cosmosis.learning import Learn, Metrics, Selector
+from cosmosis.models import GPT
+
+class TextData(BaseModel):
+    content: str
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-
-    d_seq = 20 # dimension sequence
+    d_gen = 25 # dimension generate number of tokens
     d_vocab = 50304 # dimension vocabulary
     d_vec = 384 # dimension embedding vector
     d_model = 384 # dimension model input
-    assert d_model == d_vec
-
-    ds_param = {'train_param': {'transforms': {'tokens': [AsTensor(long)],
-                                               'y': [AsTensor(long)],
-                                               'position': [AsTensor(long)]},
-                                'd_seq': d_seq,
-                                #'n': 1000,
-                                }}
-
-    app.state.model_param = {'d_model': d_model,
-                            'd_vocab': d_vocab, 
-                            'n_head': 6, 
-                            'num_layers': 6,
-                            'd_seq': d_seq,
-                            'd_vec': d_vec,
-                            'embed_param': {'tokens': (d_vocab, d_vec, None, True), 
-                                            'y': (d_vocab, d_vec, None, True),
-                                            'position': (d_seq, d_vec, None, True)}} 
-                                        
-    metrics_param = {'metric_name': 'transformer',
-                    'report_interval': 1,
-                    'log_plot': False,
-                    'min_lr': .0025} # break if learning rate falls below                        
-                
-    opt_param = {'lr': 0.01}
-
-    crit_param = {}
-
-    sample_param = {'set_seed': 88,
-                    'splits': (.7,.15)}
-
-    sched_param = {'factor': .5, 
-                'patience': 2,
-                'cooldown': 2}
-
-    app.state.learn = Learn([TinyShakes], 
-                            GPT,
-                            Metrics=Metrics,
-                            Sampler=Selector, 
-                            Optimizer=Adam, 
-                            Scheduler=ReduceLROnPlateau, 
-                            Criterion=CrossEntropyLoss,
-                            model_param=app.state.model_param, ds_param=ds_param, sample_param=sample_param,
-                            opt_param=opt_param, sched_param=sched_param, crit_param=crit_param,
-                            metrics_param=metrics_param, 
-                            batch_size=32, epochs=1, gpu=True, save_model='tinyshakes384', 
-                            load_model=None, load_embed=False, target='y')
-    
-    yield
-
-app = FastAPI(lifespan=lifespan)
-
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "service": "sagan-backend"}
-
-@app.get("/logs")
-async def read_data(request: Request):
-    file_path = "/data/"
-    
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found in bucket")
-    
-    # Standard synchronous read (works because FUSE handles the API calls)
-    with open(file_path, "r") as f:
-        content = f.read()
-
-    return {'content': content}
-
-@app.post("/prompt")
-async def handle_text(prompt: TextData):
-    
-    # inference
-    d_gen = 20 # dimension generate number of tokens
-    d_vocab = 50304 # dimension vocabulary
-    d_vec = 384 # dimension embedding vector
-    d_model = 384 # dimension model input
-    d_pos = 20 # dimension positional encoding d_pos >= max(len(prompt_tokens), d_gen)
+    d_pos = 25 # dimension positional encoding d_pos >= max(len(prompt_tokens), d_gen)
+    d_seq = 25 # dimension sequence
 
     assert d_model == d_vec
 
-    ds_param = {'train_param': {'transforms': {'tokens': [AsTensor(long)],
-                                               'y': [AsTensor(long)],
-                                               'position': [AsTensor(long)]},
-                                'prompt': prompt.content}}
+    torch.set_num_threads(torch.get_num_threads()) 
+    
+    ds_train_param = {'train_param': {'transforms': {'tokens': [AsTensor('long')],
+                                                     'y': [AsTensor('long')],
+                                                     'position': [AsTensor('long')]},
+                                      'd_seq': d_seq}}
+    
+    model_param={'d_model': d_model,
+                 'd_vocab': d_vocab, 
+                 'n_head': 6, 
+                 'num_layers': 6,
+                 'd_seq': d_seq,
+                 'd_vec': d_vec,
+                 'embed_param': {'tokens': (d_vocab, d_vec, None, True), 
+                                 'y': (d_vocab, d_vec, None, True),
+                                 'position': (d_seq, d_vec, None, True)}}
+    
+    app.state.training_learner = Learn(
+        [TinyShakes], GPT, Metrics=Metrics, Sampler=Selector, 
+        Optimizer=Adam, Scheduler=ReduceLROnPlateau, Criterion=CrossEntropyLoss,
+        model_param=model_param, ds_param=ds_train_param, 
+        batch_size=32, epochs=1, gpu=False, save_model='tinyshakes384')
 
-    model_param = {
+    model_param_inf = {
                 'd_model': d_model,
                 'd_vocab': d_vocab, 
                 'n_head': 6, 
@@ -111,28 +64,49 @@ async def handle_text(prompt: TextData):
                 'embed_param': {'tokens': (d_vocab, d_vec, None, True), 
                                 'position': (d_pos, d_vec, None, True)},
                 } 
-                                        
-    metrics_param = {'metric_name': 'transformer'}                        
-                
-    opt_param = {}
 
-    crit_param = {}
+    app.state.inference_learner = Learn(
+        [TinyShakes], GPT, Metrics=Metrics, Sampler=Selector, 
+        Optimizer=None, Scheduler=None, Criterion=None, # no criterion implies inference
+        model_param=model_param_inf, 
+        ds_param={'train_param': {'transforms': {}, 'prompt': ""}}, 
+        batch_size=1, gpu=False, load_model='tinyshakes384.pth', load_embed=True
+    )
+    
+    app.state.model_lock = threading.Lock()
+    yield
 
-    sample_param = {}
+app = FastAPI(lifespan=lifespan)
 
-    sched_param = {}
+@app.post("/prompt")
+async def handle_text(request: Request, prompt: TextData):
+    # Access the pre-loaded inference model from state
+    learner = request.app.state.inference_learner
+    lock = request.app.state.model_lock
 
-    learn = Learn([TinyShakes], 
-                  GPT,
-                  Metrics=Metrics,
-                  Sampler=Selector, 
-                  Optimizer=None, 
-                  Scheduler=None, 
-                  Criterion=None, # no criterion implies inference
-                  model_param=model_param, ds_param=ds_param, sample_param=sample_param,
-                  opt_param=opt_param, sched_param=sched_param, crit_param=crit_param,
-                  metrics_param=metrics_param, 
-                  batch_size=1, epochs=1, gpu=False, 
-                  load_model='tinyshakes384.pth', load_embed=True, target=None)
+    def locked_predict(text: str):
+        with lock:
+            # inference
+            return learner.predict(text)
 
-    return {"status": "success", "received": prompt.content}
+    try:
+        result = await run_sync(locked_predict, prompt.content)
+        return {"status": "success", "received": prompt.content, "output": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "service": "sagan-backend"}
+
+@app.get("/logs")
+async def read_data():
+    file_path = Path("/data/training_logs.txt")
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found in bucket")
+    
+    # Standard synchronous read (works because FUSE handles the API calls)
+    content = file_path.read_text()
+
+    return {'content': content}

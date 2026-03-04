@@ -223,6 +223,8 @@ kubectl get svc frontend-service -o jsonpath='{.metadata.annotations["cloud\.goo
 
 kubectl rollout restart deployment sagan-deployment  
 gcloud container clusters delete sagan-cluster --zone us-central1-a  
+gcloud container clusters resize sagan-cluster --zone us-central1-a --node-pool spot-backend-pool --num-nodes 0
+gcloud container clusters resize sagan-cluster --zone us-central1-a --node-pool spot-frontend-pool --num-nodes 0
 
 ## instructions 
 
