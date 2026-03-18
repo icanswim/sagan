@@ -1,52 +1,43 @@
 import streamlit as st
 import requests
 import os
+import time
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://backend-service:8000")
 
-st.set_page_config(page_title="sagan", page_icon="🚀")
-st.title("sagan frontend")
-st.write(f"connected to backend at: `{BACKEND_URL}`")
+st.set_page_config(page_title="Sagan Dashboard", layout="wide")
+st.title("🚀 Sagan Frontend")
+st.caption(f"Connected to backend at: {BACKEND_URL}")
 
-col1, col2 = st.columns(3)
-
-with col1:
-    if st.button("📡 connect backend", use_container_width=True):
+# --- Sidebar Log Streamer ---
+with st.sidebar:
+    st.header("📝 Training Monitor")
+    log_area = st.empty()
+    if st.checkbox("Live Stream Logs", value=True):
         try:
-            response = requests.get(f"{BACKEND_URL}/data", timeout=5)
-            response.raise_for_status() 
-            st.success("connected...")
-            st.json(response.json())
-        except Exception as e:
-            st.error(f"backend unreachable:`{BACKEND_URL}`")
-            st.caption(f"exception: {e}")
-
-with col2:
-    if st.button("🛡️ health check", use_container_width=True):
-        try:
-            response = requests.get(f"{BACKEND_URL}/health", timeout=2)
-            if response.status_code == 200:
-                st.balloons()
-                st.info("healthy...")
+            res = requests.get(f"{BACKEND_URL}/get_logs", timeout=2)
+            if res.status_code == 200:
+                log_area.code(res.json().get("logs", "No logs yet."), language="text")
         except:
-            st.warning("not healthy...")
+            log_area.caption("Connecting to backend logs...")
 
-with col3:
-    if st.button("⏳ training status...", use_container_width=True):
-        try:
-            response = requests.get(f"{BACKEND_URL}/training-status", timeout=2)
-            response.raise_for_status()
-            st.json(response.json())
-        except Exception as e:
-            st.warning(f"not ready: {e}")
+# --- Main UI Tabs ---
+t1, t2 = st.tabs(["💬 Inference", "🛠️ Training Control"])
 
-prompt = st.text_input("Hey Shakespeare...")
-if st.button("🚀 send prompt", use_container_width=True):
-    try:
-        response = requests.post(f"{BACKEND_URL}/prompt", json={"content": prompt}, timeout=5)
-        response.raise_for_status() 
-        st.success("prompt sent...")
-        st.json(response.json())
-    except Exception as e:
-        st.error(f"failed to send prompt to backend")
-        st.caption(f"exception: {e}")
+with t1:
+    prompt = st.text_area("Hey Shakespeare...", placeholder="Once upon a time...")
+    if st.button("Generate Text"):
+        with st.spinner("Processing..."):
+            res = requests.post(f"{BACKEND_URL}/prompt", json={"content": prompt})
+            st.success("Result:")
+            st.write(res.json().get("output", "No output."))
+
+with t2:
+    st.info("Triggering training launches a dedicated GKE Job.")
+    if st.button("🔥 Start Retraining"):
+        res = requests.post(f"{BACKEND_URL}/train")
+        st.info(res.json().get("message", "Job triggered."))
+
+# Refresh cycle for live logs
+time.sleep(2)
+st.rerun()

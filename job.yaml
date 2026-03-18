@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sagan-training-job
+  namespace: sagan-app
+spec:
+  backoffLimit: 2 # Added to stop runaway costs on code errors
+  ttlSecondsAfterFinished: 300 # Cleans up the pod 5 mins after finish
+  template:
+    metadata:
+      annotations:
+        gke-gcsview.io/volumes: "true"
+    spec:
+      serviceAccountName: sagan-backend-ksa
+      restartPolicy: OnFailure
+      nodeSelector:
+        cloud.google.com/gke-nodepool: "spot-backend-pool"
+      tolerations: 
+      - key: "dedicated"
+        operator: "Equal"
+        value: "spot"
+        effect: "NoSchedule"
+      securityContext:
+        fsGroup: 999
+        runAsUser: 999
+        runAsGroup: 999 # Added for 100% consistency with deployment
+      containers:
+      - name: trainer
+        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:v3
+        command: ["/opt/venv-backend/bin/python"]
+        args: ["train_job.py"] 
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "2000m"
+          limits:
+            memory: "8Gi"
+            cpu: "4000m"
+        volumeMounts:
+        - mountPath: "/app/data"
+          name: fuse-volume
+      volumes:
+      - name: fuse-volume
+        csi:
+          driver: gcsfuse.csi.storage.gke.io
+          volumeAttributes:
+            bucketName: sagan-bucket
+            mountOptions: "uid=999,gid=999"

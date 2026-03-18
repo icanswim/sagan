@@ -1,10 +1,13 @@
 import torch
 import threading
+import uuid
+import os
+import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
 from anyio.to_thread import run_sync
 from pydantic import BaseModel
 from fastapi import FastAPI, Request, HTTPException
+from kubernetes import client, config
 
 from torch.optim import Adam
 from torch.nn import CrossEntropyLoss
@@ -12,65 +15,34 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from cosmosis.dataset import AsTensor 
 from gpt.dataset import TinyShakes
-from cosmosis.learning import Learn, Metrics, Selector
-from cosmosis.models import GPT
+from cosmosis.learning import Learn, Metric, Selector
+from cosmosis.model import GPT
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("sagan-backend")
 
 class TextData(BaseModel):
     content: str
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    d_gen = 25 # dimension generate number of tokens
-    d_vocab = 50304 # dimension vocabulary
-    d_vec = 384 # dimension embedding vector
-    d_model = 384 # dimension model input
-    d_pos = 25 # dimension positional encoding d_pos >= max(len(prompt_tokens), d_gen)
-    d_seq = 25 # dimension sequence
+    MODEL_DIR = "/app/data"
+    d_gen, d_vocab, d_vec, d_model, d_pos, d_seq = 25, 50304, 384, 384, 25, 25
+    
+    model_param = {
+        'd_model': d_model, 'd_vocab': d_vocab, 'n_head': 6, 'num_layers': 6,
+        'd_seq': d_seq, 'd_vec': d_vec, 'd_gen': d_gen,
+        'embed_param': {'tokens': (d_vocab, d_vec, None, True), 
+                        'y': (d_vocab, d_vec, None, True),
+                        'position': (d_seq, d_vec, None, True)}}
 
-    assert d_model == d_vec
-
-    torch.set_num_threads(torch.get_num_threads()) 
-    
-    ds_train_param = {'train_param': {'transforms': {'tokens': [AsTensor('long')],
-                                                     'y': [AsTensor('long')],
-                                                     'position': [AsTensor('long')]},
-                                      'd_seq': d_seq}}
-    
-    model_param={'d_model': d_model,
-                 'd_vocab': d_vocab, 
-                 'n_head': 6, 
-                 'num_layers': 6,
-                 'd_seq': d_seq,
-                 'd_vec': d_vec,
-                 'embed_param': {'tokens': (d_vocab, d_vec, None, True), 
-                                 'y': (d_vocab, d_vec, None, True),
-                                 'position': (d_seq, d_vec, None, True)}}
-    
-    app.state.training_learner = Learn(
-        [TinyShakes], GPT, Metrics=Metrics, Sampler=Selector, 
+    # Explicitly set gpu=False for CPU-only environments
+    app.state.learner = Learn(
+        [TinyShakes], GPT, Metric=Metric, Sampler=Selector, 
         Optimizer=Adam, Scheduler=ReduceLROnPlateau, Criterion=CrossEntropyLoss,
-        model_param=model_param, ds_param=ds_train_param, 
-        batch_size=32, epochs=1, gpu=False, save_model='tinyshakes384')
-
-    model_param_inf = {
-                'd_model': d_model,
-                'd_vocab': d_vocab, 
-                'n_head': 6, 
-                'num_layers': 6,
-                'd_gen': d_gen,
-                'd_vec': d_vec,
-                'temperature': 100,
-                'top_k': 3,
-                'embed_param': {'tokens': (d_vocab, d_vec, None, True), 
-                                'position': (d_pos, d_vec, None, True)},
-                } 
-
-    app.state.inference_learner = Learn(
-        [TinyShakes], GPT, Metrics=Metrics, Sampler=Selector, 
-        Optimizer=None, Scheduler=None, Criterion=None, # no criterion implies inference
-        model_param=model_param_inf, 
-        ds_param={'train_param': {'transforms': {}, 'prompt': ""}}, 
-        batch_size=1, gpu=False, load_model='tinyshakes384.pth', load_embed=True
+        model_param=model_param, ds_param={'train_param': {'d_seq': d_seq}},
+        dir=MODEL_DIR, save_model='tinyshakes384', load_model='tinyshakes384',
+        gpu=False 
     )
     
     app.state.model_lock = threading.Lock()
@@ -80,33 +52,72 @@ app = FastAPI(lifespan=lifespan)
 
 @app.post("/prompt")
 async def handle_text(request: Request, prompt: TextData):
-    # Access the pre-loaded inference model from state
-    learner = request.app.state.inference_learner
+    learner = request.app.state.learner
     lock = request.app.state.model_lock
-
-    def locked_predict(text: str):
+    def locked_predict(text_input: str):
         with lock:
-            # inference
-            return learner.predict(text)
-
+            return learner.run_experiment(prompt=text_input)
     try:
         result = await run_sync(locked_predict, prompt.content)
-        return {"status": "success", "received": prompt.content, "output": result}
+        return {"status": "success", "output": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/train")
+async def trigger_training():
+    try:
+        config.load_incluster_config()
+        batch_v1 = client.BatchV1Api()
+        job_name = f"sagan-train-{uuid.uuid4().hex[:6]}"
+
+        job = client.V1Job(
+            api_version="batch/v1",
+            kind="Job",
+            metadata=client.V1ObjectMeta(name=job_name),
+            spec=client.V1JobSpec(
+                backoff_limit=1,
+                ttl_seconds_after_finished=300,
+                template=client.V1PodTemplateSpec(
+                    metadata=client.V1ObjectMeta(annotations={"gke-gcsview.io/volumes": "true"}),
+                    spec=client.V1PodSpec(
+                        service_account_name="sagan-backend-ksa",
+                        restart_policy="Never",
+                        containers=[client.V1Container(
+                            name="trainer",
+                            image="us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:v3",
+                            command=["/opt/venv-backend/bin/python"],
+                            args=["train_job.py"],
+                            volume_mounts=[client.V1VolumeMount(name="fuse-volume", mount_path="/app/data")],
+                            resources=client.V1ResourceRequirements(
+                                requests={"memory": "4Gi", "cpu": "2000m"},
+                                limits={"memory": "8Gi", "cpu": "4000m"}
+                            )
+                        )],
+                        volumes=[client.V1Volume(
+                            name="fuse-volume",
+                            csi=client.V1CSIVolumeSource(
+                                driver="gcsfuse.csi.storage.gke.io",
+                                volume_attributes={"bucketName": "sagan-bucket", "mountOptions": "uid=999,gid=999"}
+                            )
+                        )]
+                    )
+                )
+            )
+        )
+        batch_v1.create_namespaced_job(namespace="sagan-app", body=job)
+        return {"message": "CPU Training job launched", "job_id": job_name}
+    except Exception as e:
+        logger.error(f"Job launch failed: {e}")
+        raise HTTPException(status_code=500, detail="Could not trigger job")
+
+@app.get("/get_logs")
+async def get_logs():
+    log_path = "/app/data/logs/cosmosis.log"
+    if not os.path.exists(log_path):
+        return {"logs": "No logs found. Ensure GCS bucket is mounted."}
+    with open(log_path, "r") as f:
+        return {"logs": "".join(f.readlines()[-100:])}
+
 @app.get("/health")
-async def health_check():
-    return {"status": "healthy", "service": "sagan-backend"}
-
-@app.get("/logs")
-async def read_data():
-    file_path = Path("/data/training_logs.txt")
-    
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found in bucket")
-    
-    # Standard synchronous read (works because FUSE handles the API calls)
-    content = file_path.read_text()
-
-    return {'content': content}
+async def health():
+    return {"status": "healthy", "mode": "cpu"}
