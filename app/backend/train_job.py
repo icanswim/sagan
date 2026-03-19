@@ -19,7 +19,7 @@ logging.basicConfig(
 logger = logging.getLogger("sagan-trainer")
 
 def run_training():
-    MODEL_DIR = "/app/data"
+    DIR = "/app/data"
     d_vocab, d_vec, d_model, d_seq = 50304, 384, 384, 25
     
     model_param = {
@@ -53,7 +53,7 @@ def run_training():
         Optimizer=Adam, Scheduler=ReduceLROnPlateau, Criterion=CrossEntropyLoss,
         model_param=model_param, ds_param=ds_train_param, 
         batch_size=16, epochs=5, gpu=device_available, 
-        dir=MODEL_DIR, save_model='tinyshakes384'
+        dir=DIR, save_model='tinyshakes384'
     )
 
     logger.info(f"🚀 Training starting on {'GPU' if device_available else 'CPU'}...")

@@ -4,8 +4,8 @@ metadata:
   name: sagan-training-job
   namespace: sagan-app
 spec:
-  backoffLimit: 2 # Added to stop runaway costs on code errors
-  ttlSecondsAfterFinished: 300 # Cleans up the pod 5 mins after finish
+  backoffLimit: 2 
+  ttlSecondsAfterFinished: 300 
   template:
     metadata:
       annotations:
@@ -23,7 +23,7 @@ spec:
       securityContext:
         fsGroup: 999
         runAsUser: 999
-        runAsGroup: 999 # Added for 100% consistency with deployment
+        runAsGroup: 999 
       containers:
       - name: trainer
         image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:v3
@@ -37,7 +37,7 @@ spec:
             memory: "8Gi"
             cpu: "4000m"
         volumeMounts:
-        - mountPath: "/app/data"
+        - mountPath: "/app"
           name: fuse-volume
       volumes:
       - name: fuse-volume

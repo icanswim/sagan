@@ -26,7 +26,7 @@ class TextData(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    MODEL_DIR = "/app/data"
+    DIR = "./data"
     d_gen, d_vocab, d_vec, d_model, d_pos, d_seq = 25, 50304, 384, 384, 25, 25
     
     model_param = {
@@ -34,15 +34,15 @@ async def lifespan(app: FastAPI):
         'd_seq': d_seq, 'd_vec': d_vec, 'd_gen': d_gen,
         'embed_param': {'tokens': (d_vocab, d_vec, None, True), 
                         'y': (d_vocab, d_vec, None, True),
-                        'position': (d_seq, d_vec, None, True)}}
+                        'position': (d_pos, d_vec, None, True)}}
 
-    # Explicitly set gpu=False for CPU-only environments
     app.state.learner = Learn(
         [TinyShakes], GPT, Metric=Metric, Sampler=Selector, 
         Optimizer=Adam, Scheduler=ReduceLROnPlateau, Criterion=CrossEntropyLoss,
-        model_param=model_param, ds_param={'train_param': {'d_seq': d_seq}},
-        dir=MODEL_DIR, save_model='tinyshakes384', load_model='tinyshakes384',
-        gpu=False 
+        model_param=model_param, 
+        ds_param={'train_param': {'d_seq': d_seq}},
+        metric_param={'dir': DIR},
+        dir=DIR, save_model='tinyshakes384', load_model='tinyshakes384', gpu=False 
     )
     
     app.state.model_lock = threading.Lock()
@@ -97,7 +97,8 @@ async def trigger_training():
                             name="fuse-volume",
                             csi=client.V1CSIVolumeSource(
                                 driver="gcsfuse.csi.storage.gke.io",
-                                volume_attributes={"bucketName": "sagan-bucket", "mountOptions": "uid=999,gid=999"}
+                                volume_attributes={"bucketName": "sagan-bucket", 
+                                                   "mountOptions": "uid=1000,gid=1000,file-mode=775,dir-mode=775"}
                             )
                         )]
                     )
@@ -110,13 +111,23 @@ async def trigger_training():
         logger.error(f"Job launch failed: {e}")
         raise HTTPException(status_code=500, detail="Could not trigger job")
 
-@app.get("/get_logs")
-async def get_logs():
-    log_path = "/app/data/logs/cosmosis.log"
+@app.get("/get_log")
+async def get_log():
+    log_path = "/app/data/log/cosmosis.log"
+    
+    if not os.path.ismount("/app/data"):
+        raise HTTPException(status_code=503, detail="Storage volume not mounted")
+
     if not os.path.exists(log_path):
-        return {"logs": "No logs found. Ensure GCS bucket is mounted."}
-    with open(log_path, "r") as f:
-        return {"logs": "".join(f.readlines()[-100:])}
+        return {"log": f"Log file not found at {log_path}. Ensure your training job has started."}
+
+    try:
+        with open(log_path, "r") as f:
+            lines = f.readlines()
+            last_lines = lines[-100:] if len(lines) > 100 else lines
+            return {"log": "".join(last_lines)}
+    except Exception as e:
+        return {"error": f"Failed to read log: {str(e)}"}
 
 @app.get("/health")
 async def health():

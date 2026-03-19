@@ -12,15 +12,15 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 FROM python:3.12-slim-bookworm
 
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+RUN groupadd -g 1000 appuser && \
+    useradd -r -u 1000 -g appuser appuser
 
-WORKDIR /app/data
 WORKDIR /app
 
-RUN mkdir -p /app/data && chown -R appuser:appuser /app/data
-
-COPY --from=builder /opt/venv-backend /opt/venv-backend
+COPY --from=builder --chown=appuser:appuser /opt/venv-backend /opt/venv-backend
 COPY --chown=appuser:appuser . .
+
+RUN mkdir -p /app/data && chown appuser:appuser /app/data
 
 USER appuser
 EXPOSE 8000

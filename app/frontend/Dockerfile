@@ -23,5 +23,5 @@ USER appuser
 
 EXPOSE 8501
 
-#CMD ["/opt/venv-frontend/bin/streamlit", "run", "main.py", "--server.port=8501", "--server.address=0.0.0.0"]
+CMD ["/opt/venv-frontend/bin/streamlit", "run", "main.py", "--server.port=8501", "--server.address=0.0.0.0"]
 
