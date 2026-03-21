@@ -9,7 +9,7 @@ spec:
   template:
     metadata:
       annotations:
-        gke-gcsview.io/volumes: "true"
+        gke-gcsfuse.google.com: "true"
     spec:
       serviceAccountName: sagan-backend-ksa
       restartPolicy: OnFailure
@@ -21,12 +21,12 @@ spec:
         value: "spot"
         effect: "NoSchedule"
       securityContext:
-        fsGroup: 999
-        runAsUser: 999
-        runAsGroup: 999 
+        fsGroup: 1000
+        runAsUser: 1000
+        runAsGroup: 1000
       containers:
       - name: trainer
-        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:v3
+        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:v4
         command: ["/opt/venv-backend/bin/python"]
         args: ["train_job.py"] 
         resources:
@@ -37,7 +37,7 @@ spec:
             memory: "8Gi"
             cpu: "4000m"
         volumeMounts:
-        - mountPath: "/app"
+        - mountPath: "/app/data"
           name: fuse-volume
       volumes:
       - name: fuse-volume
@@ -45,4 +45,4 @@ spec:
           driver: gcsfuse.csi.storage.gke.io
           volumeAttributes:
             bucketName: sagan-bucket
-            mountOptions: "uid=999,gid=999"
+            mountOptions: "uid=1000,gid=1000,file-mode=775,dir-mode=775"

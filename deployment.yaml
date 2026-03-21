@@ -3,6 +3,15 @@ kind: Namespace
 metadata:
   name: sagan-app
 ---
+# Backend Service Account
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sagan-backend-ksa
+  namespace: sagan-app
+  annotations:
+    iam.gke.io/gcp-service-account: sagan-gsa@sagan-5.iam.gserviceaccount.com
+---
 # RBAC: Permissions for the Backend to launch GKE Training Jobs
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -13,6 +22,9 @@ rules:
 - apiGroups: ["batch"]
   resources: ["jobs"]
   verbs: ["create", "get", "list", "delete"]
+- apiGroups: [""]
+  resources: ["serviceaccounts"]
+  verbs: ["get", "list"] # Required for the Job controller to verify the SA
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -27,6 +39,82 @@ roleRef:
   kind: Role
   name: job-manager-role
   apiGroup: rbac.authorization.k8s.io
+---
+# Backend Deployment (FastAPI)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-deployment
+  namespace: sagan-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+      annotations:
+        gke-gcsfuse.google.com: "true"
+    spec:
+      serviceAccountName: sagan-backend-ksa
+      nodeSelector:
+        cloud.google.com: "spot-backend-pool"
+      tolerations: 
+      - key: "dedicated"
+        operator: "Equal"
+        value: "spot"
+        effect: "NoSchedule"
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+        runAsGroup: 1000 
+      containers:
+      - name: backend
+        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:v4
+        command: ["/opt/venv-backend/bin/uvicorn"]
+        args: ["main:app", "--host", "0.0.0.0", "--port", "8000"]
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        ports:
+        - containerPort: 8000
+        volumeMounts:
+        - mountPath: "/app/data" 
+          name: fuse-volume
+      volumes:
+      - name: fuse-volume
+        csi:
+          driver: gcsfuse.csi.storage.gke.io
+          volumeAttributes:
+            bucketName: sagan-bucket
+            mountOptions: "uid=1000,gid=1000,file-mode=775,dir-mode=775"
+---
+# Backend Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: sagan-app
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+  type: ClusterIP
+---
+# Frontend Service Account
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sagan-frontend-ksa
+  namespace: sagan-app
 ---
 # Frontend Deployment (Streamlit)
 apiVersion: apps/v1
@@ -46,7 +134,7 @@ spec:
     spec:
       serviceAccountName: sagan-frontend-ksa
       nodeSelector:
-        ://cloud.google.com: "spot-frontend-pool"
+        cloud.google.com: "spot-frontend-pool"
       tolerations:
       - key: "dedicated"
         operator: "Equal"
@@ -54,7 +142,7 @@ spec:
         effect: "NoSchedule"
       containers:
       - name: frontend
-        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-frontend:v2
+        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-frontend:v4
         workingDir: /app
         command: ["/opt/venv-frontend/bin/streamlit"]
         args: [
@@ -95,72 +183,3 @@ spec:
     - name: http-frontend
       port: 80
       targetPort: 8501
----
-# Backend Deployment (FastAPI)
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: backend-deployment
-  namespace: sagan-app
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: backend
-  template:
-    metadata:
-      labels:
-        app: backend
-      annotations:
-        gke-gcsview.io/volumes: "true"
-    spec:
-      serviceAccountName: sagan-backend-ksa
-      nodeSelector:
-        ://cloud.google.com: "spot-backend-pool"
-      tolerations: 
-      - key: "dedicated"
-        operator: "Equal"
-        value: "spot"
-        effect: "NoSchedule"
-      securityContext:
-        fsGroup: 1000
-        runAsUser: 1000
-        runAsGroup: 1000 
-      containers:
-      - name: backend
-        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:v3
-        command: ["/opt/venv-backend/bin/uvicorn"]
-        args: ["main:app", "--host", "0.0.0.0", "--port", "8000"]
-        resources:
-          requests:
-            memory: "2Gi"
-            cpu: "1000m"
-          limits:
-            memory: "4Gi"
-            cpu: "2000m"
-        ports:
-        - containerPort: 8000
-        volumeMounts:
-        - mountPath: "/app/data" 
-          name: fuse-volume
-      volumes:
-      - name: fuse-volume
-        csi:
-          driver: gcsfuse.csi.storage.gke.io
-          volumeAttributes:
-            bucketName: sagan-bucket
-            mountOptions: "uid=1000,gid=1000,file-mode=775,dir-mode=775"
----
-# Backend Service
-apiVersion: v1
-kind: Service
-metadata:
-  name: backend-service
-  namespace: sagan-app
-spec:
-  selector:
-    app: backend
-  ports:
-    - port: 8000
-      targetPort: 8000
-  type: ClusterIP

@@ -171,7 +171,7 @@ kubectl get daemonset gcs-fuse-csi-driver -n kube-system
 
 gcloud storage buckets update gs://sagan-bucket --lifecycle-file=lifecycle.json
 gcloud storage buckets describe gs://sagan-bucket --format="json(lifecycle)"
-
+kubectl label namespace sagan-app gke-gcsfuse-sidecar-injection=enabled
 
 kubectl apply -f gateway.yaml
 

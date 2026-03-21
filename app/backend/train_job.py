@@ -1,6 +1,5 @@
-import torch
-import logging
-import sys
+import sys, logging
+
 from torch.optim import Adam
 from torch.nn import CrossEntropyLoss
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -19,42 +18,34 @@ logging.basicConfig(
 logger = logging.getLogger("sagan-trainer")
 
 def run_training():
-    DIR = "/app/data"
+    dir = "/app/data/"
     d_vocab, d_vec, d_model, d_seq = 50304, 384, 384, 25
     
-    model_param = {
-        'd_model': d_model, 'd_vocab': d_vocab, 'n_head': 6, 'num_layers': 6,
-        'd_seq': d_seq, 'd_vec': d_vec,
-        'embed_param': {
-            'tokens': (d_vocab, d_vec, None, True), 
-            'y': (d_vocab, d_vec, None, True),
-            'position': (d_seq, d_vec, None, True)
-        }
-    }
+    model_param = {'d_model': d_model, 
+                   'd_vocab': d_vocab, 
+                   'n_head': 6, 
+                   'num_layers': 6,
+                   'd_seq': d_seq, 
+                   'd_vec': d_vec,
+                   'embed_param': {'tokens': (d_vocab, d_vec, None, True), 
+                                   'y': (d_vocab, d_vec, None, True),
+                                   'position': (d_seq, d_vec, None, True)}
+                    }
 
-    ds_train_param = {
-        'train_param': {
-            'transforms': {
-                'tokens': [AsTensor('long')],
-                'y': [AsTensor('long')],
-                'position': [AsTensor('long')]
-            },
-            'd_seq': d_seq
-        }
-    }
+    ds_param = {'train_param': {'transforms': {'tokens': [AsTensor('long')],
+                                               'y': [AsTensor('long')],
+                                               'position': [AsTensor('long')]},
+                                'd_seq': d_seq}
+                }
 
     logger.info("Initializing Learner for GKE Training Job...")
     
-    device_available = torch.cuda.is_available()
-    logger.info(f"CUDA Available: {device_available}")
-
     learner = Learn(
         [TinyShakes], GPT, Metric=Metric, Sampler=Selector, 
         Optimizer=Adam, Scheduler=ReduceLROnPlateau, Criterion=CrossEntropyLoss,
-        model_param=model_param, ds_param=ds_train_param, 
-        batch_size=16, epochs=5, gpu=device_available, 
-        dir=DIR, save_model='tinyshakes384'
-    )
+        model_param=model_param, ds_param=ds_param, 
+        batch_size=16, epochs=5, gpu=False, 
+        dir=dir, save_model='tinyshakes384', load_model='tinyshakes384.pt')
 
     logger.info(f"🚀 Training starting on {'GPU' if device_available else 'CPU'}...")
     
