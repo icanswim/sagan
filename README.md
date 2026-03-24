@@ -238,27 +238,29 @@ kubectl config current-context
 kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.0.0/standard-install.yaml
 curl -L https://istio.io/downloadIstio > download-istio.sh
 bash download-istio.sh
-# Move into the folder (replace x.x.x with the version downloaded)
+Move into the folder (replace x.x.x with the version downloaded)
 cd istio-1.*
 
-# Add the binary to your path temporarily
+Add the binary to your path temporarily
 export PATH=$PWD/bin:$PATH
 
-# Install the minimal profile (perfect for local dev)
+Install the minimal profile (perfect for local dev)
 istioctl install --set profile=minimal -y
 
-## instructions 
-
-# 1. Stop and delete everything managed by Skaffold
+Stop and delete everything managed by Skaffold
 skaffold delete
 
-# 2. Force delete any "stuck" jobs or pods
+Force delete any "stuck" jobs or pods
 kubectl delete jobs,pods --all -n sagan-app
 
-# 3. Ensure your terminal is still synced with Minikube's Docker
+Ensure your terminal is still synced with Minikube's Docker
 eval $(minikube docker-env)
 
 skaffold dev --force=true --port-forward
 
- 
+kubectl get pods -n sagan-app
+export BACKEND_POD=$(kubectl get pods -n sagan-app -l app=backend -o jsonpath='{.items[0].metadata.name}') echo $BACKEND_POD
+kubectl exec $BACKEND_POD -n sagan-app -- cat /app/data/cosmosis.log
+kubectl exec $BACKEND_POD -n sagan-app -- ls /app/data/
+
 

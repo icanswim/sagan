@@ -1,4 +1,4 @@
-import sys, logging
+import sys
 
 from torch import long
 from torch.optim import Adam
@@ -10,9 +10,8 @@ from gpt.dataset import TinyShakes
 from cosmosis.learning import Learn, Metric, Selector
 from cosmosis.model import GPT
 
-print("🚀 Starting training job...")
 
-logger = logging.getLogger("sagan-trainer")
+Metric.setup_logging(log_name='train_job', log_dir='/app/data/')
 
 def run_training():
     dir = "/app/data/"
@@ -37,14 +36,14 @@ def run_training():
 
     logger.info("Initializing Learner for GKE Training Job...")
 
-    _metric = Metric(dir=dir)
+    #_metric = Metric(dir=dir)
     logger.info("Metric initialized successfully.")
     
     learner = Learn(
         [TinyShakes], GPT, Metric=Metric, Sampler=Selector, 
         Optimizer=Adam, Scheduler=ReduceLROnPlateau, Criterion=CrossEntropyLoss,
         model_param=model_param, ds_param=ds_param, 
-        batch_size=16, epochs=5, gpu=False, 
+        batch_size=16, epochs=1, gpu=False, 
         dir=dir, save_model='tinyshakes384', load_model='tinyshakes384.pt')
 
     logger.info(f"🚀 Training starting on CPU'...")

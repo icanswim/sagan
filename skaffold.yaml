@@ -40,10 +40,10 @@ deploy:
     hooks:
       before:
         - host:
-            # 1. Generate certs
+            # generate certs
             command: ["sh", "-c", "openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout server.key -out server.crt -subj '/CN=app.wylderhayes.com' -addext 'subjectAltName=DNS:app.wylderhayes.com'"]
         - host:
-            # 2. Combined Namespace + Secret creation
-            # This creates the namespace IF it's missing, then creates the secret.
+            # combined namespace + secret creation
+            # create the namespace if missing, then create the secret
             command: ["sh", "-c", "kubectl create namespace sagan-app --dry-run=client -o yaml | kubectl apply -f - && kubectl create secret tls sagan-local-cert --key server.key --cert server.crt --namespace sagan-app --dry-run=client -o yaml | kubectl apply -f -"]
 

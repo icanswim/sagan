@@ -1,4 +1,4 @@
-import os, uuid, logging, threading
+import os, uuid, glob, threading
 from contextlib import asynccontextmanager
 
 from anyio.to_thread import run_sync
@@ -13,22 +13,17 @@ from torch.optim import Adam
 from torch.nn import CrossEntropyLoss
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-from cosmosis.dataset import AsTensor 
 from gpt.dataset import TinyShakes
 from cosmosis.learning import Learn, Metric, Selector
 from cosmosis.model import GPT
 
-# Assuming your models/utils are imported here (Learn, GPT, etc.)
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("sagan-backend")
+Metric.setup_logging(log_name='backend', log_dir='/app/data/')
 
 class TextData(BaseModel):
     content: str
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Use /app/data which will be backed by a PVC in Minikube
     data_dir = "/app/data/"
     d_gen, d_vocab, d_vec, d_model, d_seq = 25, 50304, 384, 384, 25
     
@@ -39,9 +34,8 @@ async def lifespan(app: FastAPI):
                         'y': (d_vocab, d_vec, None, True),
                         'position': (d_seq, d_vec, None, True)}}
     
-    ds_param = {'train_param': {'dir': data_dir, 'd_seq': d_seq, 'n': 338035, 'prompt': None}}
-
-    # Initialize learner
+    ds_param = {'train_param': {'dir': data_dir, 'd_seq': d_seq, 'n': 1000, 'prompt': None}}
+    # n = 338035
     app.state.learner = Learn(
         [TinyShakes], GPT, Metric=Metric, Sampler=Selector, 
         Optimizer=Adam, Scheduler=ReduceLROnPlateau, Criterion=CrossEntropyLoss,
@@ -128,21 +122,29 @@ def load_k8s_config():  # Load Kubernetes config, trying local first then in-clu
 
 @app.get("/get_log")
 async def get_log():
-    log_path = "/app/data/cosmosis.log"
-    
-    #if not os.path.ismount("/app/data"):
-    #    raise HTTPException(status_code=503, detail="Storage volume not mounted")
 
-    if not os.path.exists(log_path):
-        return {"log": f"Log file not found at {log_path}. Ensure your training job has started."}
+    log_search_pattern = f'/app/data/*.log'
+    log_files = glob.glob(log_search_pattern)
+    
+    if not log_files:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"No log files found matching prefix: {pattern}"
+        )
+
+    latest_log_path = max(log_files, key=os.path.getmtime)
 
     try:
-        with open(log_path, "r") as f:
+        with open(latest_log_path, "r") as f:
             lines = f.readlines()
             last_lines = lines[-100:] if len(lines) > 100 else lines
-            return {"log": "".join(last_lines)}
+            return {
+                "filename": os.path.basename(latest_log_path),
+                "log": "".join(last_lines)
+            }
     except Exception as e:
-        return {"error": f"Failed to read log: {str(e)}"}
+        return {"error": f"Failed to read {latest_log_path}: {str(e)}"}
+
 
 @app.get("/health")
 async def health():
