@@ -1,9 +1,22 @@
 import os, uuid, logging, threading
-from fastapi import FastAPI, Request, HTTPException
 from contextlib import asynccontextmanager
+
+from anyio.to_thread import run_sync
+
+from fastapi import FastAPI, Request, HTTPException
+
 from pydantic import BaseModel
+
 from kubernetes import client, config
-from anyio import to_thread
+
+from torch.optim import Adam
+from torch.nn import CrossEntropyLoss
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+
+from cosmosis.dataset import AsTensor 
+from gpt.dataset import TinyShakes
+from cosmosis.learning import Learn, Metric, Selector
+from cosmosis.model import GPT
 
 # Assuming your models/utils are imported here (Learn, GPT, etc.)
 
@@ -117,8 +130,8 @@ def load_k8s_config():  # Load Kubernetes config, trying local first then in-clu
 async def get_log():
     log_path = "/app/data/cosmosis.log"
     
-    if not os.path.ismount("/app/data"):
-        raise HTTPException(status_code=503, detail="Storage volume not mounted")
+    #if not os.path.ismount("/app/data"):
+    #    raise HTTPException(status_code=503, detail="Storage volume not mounted")
 
     if not os.path.exists(log_path):
         return {"log": f"Log file not found at {log_path}. Ensure your training job has started."}

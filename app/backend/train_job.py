@@ -12,12 +12,6 @@ from cosmosis.model import GPT
 
 print("🚀 Starting training job...")
 
-# Force logs to stream immediately to GKE/Streamlit
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    stream=sys.stdout 
-)
 logger = logging.getLogger("sagan-trainer")
 
 def run_training():
@@ -42,6 +36,9 @@ def run_training():
                 }
 
     logger.info("Initializing Learner for GKE Training Job...")
+
+    _metric = Metric(dir=dir)
+    logger.info("Metric initialized successfully.")
     
     learner = Learn(
         [TinyShakes], GPT, Metric=Metric, Sampler=Selector, 

@@ -8,9 +8,9 @@ build:
     useDockerCLI: true
     push: false
   artifacts:
-    - image: sagan-backend:local
+    - image: sagan-backend
       context: app/backend
-    - image: sagan-frontend:local
+    - image: sagan-frontend
       context: app/frontend
 
 manifests:

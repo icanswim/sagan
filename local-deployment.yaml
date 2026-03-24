@@ -41,7 +41,7 @@ spec:
       serviceAccountName: sagan-backend-ksa
       containers:
       - name: backend
-        image: sagan-backend:local
+        image: sagan-backend
         imagePullPolicy: Never
         command: ["/app/.venv/bin/uvicorn"]
         args: ["main:app", "--host", "0.0.0.0", "--port", "8000"]
@@ -93,7 +93,7 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: sagan-frontend:local
+        image: sagan-frontend
         imagePullPolicy: Never
         command: ["/app/.venv/bin/streamlit"]
         args: ["run", "main.py", "--server.address", "0.0.0.0", "--server.port", "8501"]

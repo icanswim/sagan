@@ -233,7 +233,7 @@ minikube addons enable istio
 eval $(minikube docker-env)
 
 kubectl config use-context minikube
-
+kubectl config current-context
 
 kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.0.0/standard-install.yaml
 curl -L https://istio.io/downloadIstio > download-istio.sh
