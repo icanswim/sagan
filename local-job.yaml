@@ -1,0 +1,38 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sagan-training-job
+  namespace: sagan-app
+spec:
+  backoffLimit: 2 
+  ttlSecondsAfterFinished: 300 
+  template:
+    spec:
+      serviceAccountName: sagan-backend-ksa
+      restartPolicy: OnFailure
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+      - name: trainer
+        # Use your local image tag
+        image: sagan-backend:local
+        imagePullPolicy: Never
+        command: ["/opt/venv-backend/bin/python"]
+        args: ["train_job.py"] 
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        volumeMounts:
+        - mountPath: "/app/data"
+          name: local-data-vol
+      volumes:
+      - name: local-data-vol
+        # FIX: Mount the shared PVC instead of an emptyDir
+        persistentVolumeClaim:
+          claimName: sagan-pvc

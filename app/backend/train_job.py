@@ -1,5 +1,6 @@
 import sys, logging
 
+from torch import long
 from torch.optim import Adam
 from torch.nn import CrossEntropyLoss
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -8,6 +9,8 @@ from cosmosis.dataset import AsTensor
 from gpt.dataset import TinyShakes
 from cosmosis.learning import Learn, Metric, Selector
 from cosmosis.model import GPT
+
+print("🚀 Starting training job...")
 
 # Force logs to stream immediately to GKE/Streamlit
 logging.basicConfig(
@@ -32,9 +35,9 @@ def run_training():
                                    'position': (d_seq, d_vec, None, True)}
                     }
 
-    ds_param = {'train_param': {'transforms': {'tokens': [AsTensor('long')],
-                                               'y': [AsTensor('long')],
-                                               'position': [AsTensor('long')]},
+    ds_param = {'train_param': {'transforms': {'tokens': [AsTensor(long)],
+                                               'y': [AsTensor(long)],
+                                               'position': [AsTensor(long)]},
                                 'd_seq': d_seq}
                 }
 
@@ -47,7 +50,7 @@ def run_training():
         batch_size=16, epochs=5, gpu=False, 
         dir=dir, save_model='tinyshakes384', load_model='tinyshakes384.pt')
 
-    logger.info(f"🚀 Training starting on {'GPU' if device_available else 'CPU'}...")
+    logger.info(f"🚀 Training starting on CPU'...")
     
     try:
         learner.run_experiment()

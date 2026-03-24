@@ -1,0 +1,126 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sagan-app
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sagan-pvc
+  namespace: sagan-app
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+---
+# Backend Service Account (Simplified for local)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sagan-backend-ksa
+  namespace: sagan-app
+---
+# Backend Deployment (FastAPI)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-deployment
+  namespace: sagan-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      serviceAccountName: sagan-backend-ksa
+      containers:
+      - name: backend
+        image: sagan-backend:local
+        imagePullPolicy: Never
+        command: ["/app/.venv/bin/uvicorn"]
+        args: ["main:app", "--host", "0.0.0.0", "--port", "8000"]
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        ports:
+        - containerPort: 8000
+        volumeMounts:
+        - mountPath: "/app/data" 
+          name: local-data-vol
+      volumes:
+      - name: local-data-vol
+        persistentVolumeClaim:
+          claimName: sagan-pvc
+---
+# Backend Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: sagan-app
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+# Frontend Deployment (Streamlit)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend-deployment
+  namespace: sagan-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+      - name: frontend
+        image: sagan-frontend:local
+        imagePullPolicy: Never
+        command: ["/app/.venv/bin/streamlit"]
+        args: ["run", "main.py", "--server.address", "0.0.0.0", "--server.port", "8501"]
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        env:
+        - name: BACKEND_URL
+          value: "http://backend-service:8000"
+        ports:
+        - containerPort: 8501
+---
+# Frontend Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: sagan-app
+spec:
+  type: NodePort
+  selector:
+    app: frontend
+  ports:
+    - name: http-frontend
+      port: 8501        
+      targetPort: 8501  

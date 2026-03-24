@@ -1,0 +1,49 @@
+apiVersion: skaffold/v4beta13
+kind: Config
+metadata:
+  name: sagan
+build:
+  local:
+    useBuildkit: true
+    useDockerCLI: true
+    push: false
+  artifacts:
+    - image: sagan-backend:local
+      context: app/backend
+    - image: sagan-frontend:local
+      context: app/frontend
+
+manifests:
+  rawYaml:
+    - istio-class.yaml
+    - local-deployment.yaml
+    - local-gateway.yaml
+    - local-job.yaml
+    - local-pvc.yaml
+    - routes.yaml
+    - local-k8s-rbac.yaml
+
+portForward:
+  - resourceType: service
+    resourceName: frontend-service
+    namespace: sagan-app
+    port: 8501
+    localPort: 8501
+  - resourceType: service
+    resourceName: backend-service
+    namespace: sagan-app
+    port: 8000
+    localPort: 8000
+
+deploy:
+  kubectl:
+    hooks:
+      before:
+        - host:
+            # 1. Generate certs
+            command: ["sh", "-c", "openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout server.key -out server.crt -subj '/CN=app.wylderhayes.com' -addext 'subjectAltName=DNS:app.wylderhayes.com'"]
+        - host:
+            # 2. Combined Namespace + Secret creation
+            # This creates the namespace IF it's missing, then creates the secret.
+            command: ["sh", "-c", "kubectl create namespace sagan-app --dry-run=client -o yaml | kubectl apply -f - && kubectl create secret tls sagan-local-cert --key server.key --cert server.crt --namespace sagan-app --dry-run=client -o yaml | kubectl apply -f -"]
+

@@ -1,0 +1,23 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: job-manager-role
+  namespace: sagan-app
+rules:
+- apiGroups: ["batch", ""]
+  resources: ["jobs", "pods", "pods/log"]
+  verbs: ["create", "get", "list", "watch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sagan-backend-rb
+  namespace: sagan-app
+subjects:
+- kind: ServiceAccount
+  name: sagan-backend-ksa
+  namespace: sagan-app
+roleRef:
+  kind: Role
+  name: job-manager-role
+  apiGroup: rbac.authorization.k8s.io

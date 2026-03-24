@@ -15,6 +15,7 @@ https://github.com/GoogleCloudPlatform/gke-networking-recipes
 gcloud auth login  
 create new gcloud project  
 gcloud config set project PROJECT_ID  
+gcloud components install skaffold
 
 export PROJECT_ID=$(gcloud config get-value project)  
 export IMAGE_REPO_NAME=sagan-image-repo  
@@ -226,9 +227,38 @@ gcloud container clusters delete sagan-cluster --zone us-central1-a
 gcloud container clusters resize sagan-cluster --zone us-central1-a --node-pool spot-backend-pool --num-nodes 0
 gcloud container clusters resize sagan-cluster --zone us-central1-a --node-pool spot-frontend-pool --num-nodes 0
 
+
+minikube start --cpus 4 --memory 8192
+minikube addons enable istio
+eval $(minikube docker-env)
+
+kubectl config use-context minikube
+
+
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.0.0/standard-install.yaml
+curl -L https://istio.io/downloadIstio > download-istio.sh
+bash download-istio.sh
+# Move into the folder (replace x.x.x with the version downloaded)
+cd istio-1.*
+
+# Add the binary to your path temporarily
+export PATH=$PWD/bin:$PATH
+
+# Install the minimal profile (perfect for local dev)
+istioctl install --set profile=minimal -y
+
 ## instructions 
 
+# 1. Stop and delete everything managed by Skaffold
+skaffold delete
 
+# 2. Force delete any "stuck" jobs or pods
+kubectl delete jobs,pods --all -n sagan-app
+
+# 3. Ensure your terminal is still synced with Minikube's Docker
+eval $(minikube docker-env)
+
+skaffold dev --force=true --port-forward
 
  
 
