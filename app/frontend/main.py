@@ -7,7 +7,7 @@ st.set_page_config(page_title="Sagan Dashboard", layout="wide")
 
 st.markdown("""
     <style>
-        section[data-testid="stSidebar"] { width: 450px !important; }
+        section[data-testid="stSidebar"] { width: 700px !important; }
         .stCodeBlock { font-size: 0.75rem !important; }
     </style>
 """, unsafe_allow_html=True)
@@ -17,7 +17,6 @@ BACKEND_URL = os.getenv("BACKEND_URL", "http://backend-service:8000")
 st.title("🚀 Sagan Dashboard")
 st.caption(f"Connected to backend at: {BACKEND_URL}")
 
-# 2. Robust Log Fragment
 @st.fragment(run_every="5s")
 def sync_logs_fragment():
     st.subheader("📝 Training Monitor")

@@ -10,13 +10,14 @@ from pydantic import BaseModel
 
 from kubernetes import client, config
 
+from torch import long
 from torch.optim import Adam
-from torch.nn import CrossEntropyLoss
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from gpt.dataset import TinyShakes
 from cosmosis.learning import Learn, Metric, Selector
 from cosmosis.model import GPT
+from cosmosis.dataset import AsTensor
 
 logger = Metric.setup_logging(log_name='backend', log_dir='/app/data/')
 
@@ -34,29 +35,52 @@ async def lifespan(app: FastAPI):
 
     load_k8s_config()
 
-    data_dir = "/app/data/"
-    d_gen, d_vocab, d_vec, d_model, d_seq = 25, 50304, 384, 384, 25
-    
-    model_param = {'d_model': d_model, 'd_vocab': d_vocab, 
-                   'n_head': 6, 'num_layers': 6, 'd_seq': d_seq, 
-                   'd_vec': d_vec, 'd_gen': d_gen,
+    dir = "/app/data/"
+    d_gen = 25 # dimension generate number of tokens
+    d_vocab = 50304 # dimension vocabulary
+    d_vec = 384 # dimension embedding vector
+    d_model = 384 # dimension model input
+    d_pos = 25 # dimension positional encoding d_pos >= max(len(prompt_tokens), d_gen)
+
+    assert d_model == d_vec
+
+    ds_param = {'train_param': {'transforms': {'tokens': [AsTensor(long)],
+                                               'y': [AsTensor(long)],
+                                               'position': [AsTensor(long)]},
+                                'd_seq': d_pos,
+                                'n': 1000,
+                                'dir': dir,
+                                'prompt': None},
+                }
+
+    model_param = {'d_model': d_model,
+                   'd_vocab': d_vocab, 
+                   'n_head': 6, 
+                   'num_layers': 6,
+                   'd_gen': d_gen,
+                   'd_vec': d_vec,
+                   'temperature': 1000,
+                   'top_k': 3,
                    'embed_param': {'tokens': (d_vocab, d_vec, None, True), 
-                                   'y': (d_vocab, d_vec, None, True),
-                                   'position': (d_seq, d_vec, None, True)}}
-    
-    # n = 338035
-    ds_param = {'train_param': {'dir': data_dir, 'd_seq': d_seq, 
-                                'n': 1000, 'prompt': None}}
-    
-    metric_param = {'dir': data_dir}
-    
-    
+                                   #'y': (d_vocab, d_vec, None, True),
+                                   'position': (d_pos, d_vec, None, True)},
+                    } 
+                                        
+    metric_param = {'dir': dir, 
+                    'metric_name': 'transformer'}                        
+                
+    opt_param = {}
+    crit_param = {}
+    sample_param = {}
+    sched_param = {}
 
     app.state.learner = Learn(
         [TinyShakes], GPT, Metric=Metric, Sampler=Selector, 
-        Optimizer=Adam, Scheduler=ReduceLROnPlateau, Criterion=CrossEntropyLoss,
+        Optimizer=None, Scheduler=None, Criterion=None,
         model_param=model_param, ds_param=ds_param, metric_param=metric_param,
-        dir=data_dir, save_model='tinyshakes384', load_model='tinyshakes384.pt', 
+        opt_param=opt_param, crit_param=crit_param, sample_param=sample_param, 
+        sched_param=sched_param,
+        dir=dir, save_model=False, load_model='tinyshakes384.pt', 
         gpu=False)
     
     app.state.model_lock = threading.Lock()
