@@ -12,6 +12,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM python:3.12-slim-bookworm
 WORKDIR /app
 
+ENV PYTHONUNBUFFERED=1
+
 RUN groupadd -g 1000 appuser && \
     useradd -r -u 1000 -g appuser -m appuser
 

@@ -23,42 +23,51 @@ logger = Metric.setup_logging(log_name='backend', log_dir='/app/data/')
 class TextData(BaseModel):
     content: str
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    data_dir = "/app/data/"
-    d_gen, d_vocab, d_vec, d_model, d_seq = 25, 50304, 384, 384, 25
-    
-    model_param = {
-        'd_model': d_model, 'd_vocab': d_vocab, 'n_head': 6, 'num_layers': 6,
-        'd_seq': d_seq, 'd_vec': d_vec, 'd_gen': d_gen,
-        'embed_param': {'tokens': (d_vocab, d_vec, None, True), 
-                        'y': (d_vocab, d_vec, None, True),
-                        'position': (d_seq, d_vec, None, True)}}
-    
-    ds_param = {'train_param': {'dir': data_dir, 'd_seq': d_seq, 'n': 1000, 'prompt': None}}
-    # n = 338035
-    app.state.learner = Learn(
-        [TinyShakes], GPT, Metric=Metric, Sampler=Selector, 
-        Optimizer=Adam, Scheduler=ReduceLROnPlateau, Criterion=CrossEntropyLoss,
-        model_param=model_param, ds_param=ds_param, metric_param={'dir': data_dir},
-        dir=data_dir, save_model='tinyshakes384', load_model='tinyshakes384.pt', gpu=False 
-    )
-    
-    app.state.model_lock = threading.Lock()
-    yield
-
-app = FastAPI(lifespan=lifespan)
-
 def load_k8s_config():
     try:
         config.load_incluster_config()
     except config.ConfigException:
         config.load_kube_config()
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+
+    load_k8s_config()
+
+    data_dir = "/app/data/"
+    d_gen, d_vocab, d_vec, d_model, d_seq = 25, 50304, 384, 384, 25
+    
+    model_param = {'d_model': d_model, 'd_vocab': d_vocab, 
+                   'n_head': 6, 'num_layers': 6, 'd_seq': d_seq, 
+                   'd_vec': d_vec, 'd_gen': d_gen,
+                   'embed_param': {'tokens': (d_vocab, d_vec, None, True), 
+                                   'y': (d_vocab, d_vec, None, True),
+                                   'position': (d_seq, d_vec, None, True)}}
+    
+    # n = 338035
+    ds_param = {'train_param': {'dir': data_dir, 'd_seq': d_seq, 
+                                'n': 1000, 'prompt': None}}
+    
+    metric_param = {'dir': data_dir}
+    
+    
+
+    app.state.learner = Learn(
+        [TinyShakes], GPT, Metric=Metric, Sampler=Selector, 
+        Optimizer=Adam, Scheduler=ReduceLROnPlateau, Criterion=CrossEntropyLoss,
+        model_param=model_param, ds_param=ds_param, metric_param=metric_param,
+        dir=data_dir, save_model='tinyshakes384', load_model='tinyshakes384.pt', 
+        gpu=False)
+    
+    app.state.model_lock = threading.Lock()
+    yield
+
+app = FastAPI(lifespan=lifespan)
+
+
 @app.post("/train")
 async def trigger_training():
     try:
-        load_k8s_config()
         batch_v1 = client.BatchV1Api()
         job_name = f"sagan-train-{uuid.uuid4().hex[:6]}"
 
@@ -72,14 +81,14 @@ async def trigger_training():
                 template=client.V1PodTemplateSpec(
                     spec=client.V1PodSpec(
                         restart_policy="Never",
-                        # Matches your ServiceAccount in local-k8s-rbac.yaml
                         service_account_name="sagan-backend-ksa", 
                         containers=[client.V1Container(
                             name="trainer",
-                            image="sagan-backend", # Matches skaffold.yaml tag
-                            image_pull_policy="Never",   # Forces use of local Minikube image
+                            image="sagan-backend", 
+                            image_pull_policy="Never",   
                             command=["python", "train_job.py"],
-                            volume_mounts=[client.V1VolumeMount(name="data-storage", mount_path="/app/data")],
+                            volume_mounts=[client.V1VolumeMount(name="data-storage", 
+                                                                mount_path="/app/data")],
                             resources=client.V1ResourceRequirements(
                                 requests={"memory": "512Mi", "cpu": "500m"},
                                 limits={"memory": "1Gi", "cpu": "1000m"}
@@ -88,7 +97,7 @@ async def trigger_training():
                         volumes=[client.V1Volume(
                             name="data-storage",
                             persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
-                                claim_name="sagan-pvc" # Shared with the backend
+                                claim_name="sagan-pvc" 
                             )
                         )]
                     )
@@ -110,42 +119,43 @@ async def handle_text(request: Request, prompt: TextData):
         with lock:
             return learner.run_experiment(prompt=text_input)
     try:
-        result = await run_sync(locked_predict, prompt.content)
-        logger.info(f"Processed prompt: {prompt.content}... -> {result}...")
-        return {"status": "success", "output": result}
+        response = await run_sync(locked_predict, prompt.content)
+        logger.info(f"prompt: {prompt.content}\nresponse {response}")
+        return {"response": response}
     except Exception as e:
         logger.error(f"Failed to process prompt: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     
-def load_k8s_config():  # Load Kubernetes config, trying local first then in-cluster
-    try:
-        config.load_kube_config()
-    except config.ConfigException:
-        config.load_incluster_config()
-
 @app.get("/get_log")
 async def get_log():
-    patterns = [f'/app/data/*backend.log', f'/app/data/*train_job.log']
+    log_dir = "/app/data/"
+    # Pattern must have wildcards to catch the timestamp
+    patterns = [f'{log_dir}*backend*.log', f'{log_dir}*train_job*.log']
     output = {}
     
+    # Force GCS Fuse to refresh its file list
+    try: os.listdir(log_dir)
+    except: pass
+
     for pattern in patterns:
         files = glob.glob(pattern)
         if not files:
             continue
             
-        # Get the latest file for this specific pattern
+        # Get the newest log file based on modified time
         latest_path = max(files, key=os.path.getmtime)
         
         try:
-            # Efficiently get last 100 lines without loading the whole file
             with open(latest_path, "r") as f:
+                # Read the last 100 lines
                 last_lines = deque(f, maxlen=100)
                 output[os.path.basename(latest_path)] = "".join(last_lines)
         except Exception as e:
-            output[os.path.basename(latest_path)] = f"Error: {str(e)}"
+            output[os.path.basename(latest_path)] = f"Read Error: {str(e)}"
 
     if not output:
-        raise HTTPException(status_code=404, detail="No log files found.")
+        # If this hits, the glob patterns are definitely the culprit
+        raise HTTPException(status_code=404, detail=f"No matches for {patterns}")
 
     return output
 

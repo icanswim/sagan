@@ -1,43 +1,51 @@
-import streamlit as st
 import requests
+import streamlit as st
 import os
-import time
 
-# Use the service name defined in your k8s manifest
+# 1. Setup Page & CSS for better "Log Reshaping"
+st.set_page_config(page_title="Sagan Dashboard", layout="wide")
+
+st.markdown("""
+    <style>
+        section[data-testid="stSidebar"] { width: 450px !important; }
+        .stCodeBlock { font-size: 0.75rem !important; }
+    </style>
+""", unsafe_allow_html=True)
+
 BACKEND_URL = os.getenv("BACKEND_URL", "http://backend-service:8000")
 
-st.set_page_config(page_title="Sagan Dashboard", layout="wide")
-st.title("🚀 Sagan Frontend")
+st.title("🚀 Sagan Dashboard")
 st.caption(f"Connected to backend at: {BACKEND_URL}")
 
-# --- Sidebar Log Streamer ---
-with st.sidebar:
-    st.header("📝 Training Monitor")
+# 2. Robust Log Fragment
+@st.fragment(run_every="5s")
+def sync_logs_fragment():
+    st.subheader("📝 Training Monitor")
+    stream_enabled = st.toggle("Live Stream", value=True)
     log_area = st.empty()
-    
-    # Checkbox to toggle streaming
-    stream_enabled = st.checkbox("Live Stream Log", value=True)
     
     if stream_enabled:
         try:
-            # Short timeout to keep the UI responsive
-            res = requests.get(f"{BACKEND_URL}/get_log", timeout=1.5)
+            res = requests.get(f"{BACKEND_URL}/get_log", timeout=3.0)
             if res.status_code == 200:
                 data = res.json()
-                log_text = data.get("log", "")
-                if not log_text:
-                    log_area.info("Log file is currently empty.")
+                if not data:
+                    log_area.info("Logs are currently empty.")
                 else:
-                    # Uses code block for better readability of logs
-                    log_area.code(log_text, language="text")
-            elif res.status_code == 503:
-                log_area.warning("Storage volume not mounted yet.")
+                    combined_text = ""
+                    for filename, content in data.items():
+                        combined_text += f"=== {filename} ===\n{content}\n\n"
+                    # Show the last 10,000 characters
+                    log_area.code(combined_text[-10000:], language="text")
             else:
-                log_area.error(f"Backend returned status: {res.status_code}")
+                log_area.warning(f"Backend Status: {res.status_code}")
         except Exception:
-            log_area.warning("Waiting for backend connection...")
+            log_area.warning("Connecting to backend...")
 
-# --- Main UI Tabs ---
+with st.sidebar:
+    sync_logs_fragment()
+
+# 3. Main UI Tabs
 t1, t2 = st.tabs(["💬 Inference", "🛠️ Training Control"])
 
 with t1:
@@ -48,27 +56,22 @@ with t1:
         else:
             with st.spinner("Generating..."):
                 try:
-                    res = requests.post(f"{BACKEND_URL}/prompt", json={"content": prompt_input}, timeout=10)
+                    res = requests.post(f"{BACKEND_URL}/prompt", json={"content": prompt_input}, timeout=15)
                     if res.status_code == 200:
                         st.success("Result:")
-                        st.write(res.json().get("output", "No output received."))
+                        # FIX: Matches your backend's 'response' key
+                        st.write(res.json().get("response", "No response field in JSON."))
                     else:
                         st.error(f"Error: {res.text}")
                 except Exception as e:
                     st.error(f"Failed to reach backend: {e}")
 
 with t2:
-    st.info("triggering training launches a dedicated Kubernetes Job in the 'sagan-app' namespace.")
-    if st.button("🔥 start training", type="primary"):
+    st.info("Triggering training launches a GKE Job.")
+    if st.button("🔥 Start Training", type="primary"):
         try:
-            res = requests.post(f"{BACKEND_URL}/train", timeout=5)
-            msg = res.json().get("message", "Job triggered.")
-            job_id = res.json().get("job_id", "unknown")
-            st.success(f"{msg} (ID: {job_id})")
+            res = requests.post(f"{BACKEND_URL}/train", timeout=10)
+            data = res.json()
+            st.success(f"{data.get('message')} (ID: {data.get('job_id')})")
         except Exception as e:
             st.error(f"Failed to launch training: {e}")
-
-# Automated refresh for logs
-if stream_enabled:
-    time.sleep(2)
-    st.rerun()
