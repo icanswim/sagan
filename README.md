@@ -260,7 +260,8 @@ skaffold dev --force=true --port-forward
 
 kubectl get pods -n sagan-app
 export BACKEND_POD=$(kubectl get pods -n sagan-app -l app=backend -o jsonpath='{.items[0].metadata.name}') echo $BACKEND_POD
-kubectl exec $BACKEND_POD -n sagan-app -- cat /app/data/cosmosis.log
+kubectl exec $BACKEND_POD -n sagan-app -- cat /app/data/backend_20260326_003621.log
+
 kubectl exec $BACKEND_POD -n sagan-app -- ls /app/data/
 
 

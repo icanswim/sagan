@@ -41,7 +41,7 @@ with st.sidebar:
 t1, t2 = st.tabs(["💬 Inference", "🛠️ Training Control"])
 
 with t1:
-    prompt_input = st.text_area("Hey Shakespeare...", placeholder="Once upon a time...", height=150)
+    prompt_input = st.text_area("Hey Shakespeare...", placeholder="To be or not to be...", height=150)
     if st.button("Generate Text", type="primary"):
         if not prompt_input:
             st.warning("Please enter a prompt first.")
@@ -58,8 +58,8 @@ with t1:
                     st.error(f"Failed to reach backend: {e}")
 
 with t2:
-    st.info("Triggering training launches a dedicated Kubernetes Job in the 'sagan-app' namespace.")
-    if st.button("🔥 Start Retraining"):
+    st.info("triggering training launches a dedicated Kubernetes Job in the 'sagan-app' namespace.")
+    if st.button("🔥 start training", type="primary"):
         try:
             res = requests.post(f"{BACKEND_URL}/train", timeout=5)
             msg = res.json().get("message", "Job triggered.")

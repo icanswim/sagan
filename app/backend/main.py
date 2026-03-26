@@ -1,5 +1,6 @@
 import os, uuid, glob, threading
 from contextlib import asynccontextmanager
+from collections import deque
 
 from anyio.to_thread import run_sync
 
@@ -17,7 +18,7 @@ from gpt.dataset import TinyShakes
 from cosmosis.learning import Learn, Metric, Selector
 from cosmosis.model import GPT
 
-Metric.setup_logging(log_name='backend', log_dir='/app/data/')
+logger = Metric.setup_logging(log_name='backend', log_dir='/app/data/')
 
 class TextData(BaseModel):
     content: str
@@ -75,7 +76,7 @@ async def trigger_training():
                         service_account_name="sagan-backend-ksa", 
                         containers=[client.V1Container(
                             name="trainer",
-                            image="sagan-backend:local", # Matches skaffold.yaml tag
+                            image="sagan-backend", # Matches skaffold.yaml tag
                             image_pull_policy="Never",   # Forces use of local Minikube image
                             command=["python", "train_job.py"],
                             volume_mounts=[client.V1VolumeMount(name="data-storage", mount_path="/app/data")],
@@ -94,8 +95,8 @@ async def trigger_training():
                 )
             )
         )
-        # FIX: Changed namespace from 'default' to 'sagan-app'
         batch_v1.create_namespaced_job(namespace="sagan-app", body=job)
+        logger.info(f"🚀 Launched training job '{job_name}' in 'sagan-app' namespace.")
         return {"message": "Job launched in sagan-app namespace", "job_id": job_name}
     except Exception as e:
         logger.error(f"Launch failed: {e}")
@@ -110,8 +111,10 @@ async def handle_text(request: Request, prompt: TextData):
             return learner.run_experiment(prompt=text_input)
     try:
         result = await run_sync(locked_predict, prompt.content)
+        logger.info(f"Processed prompt: {prompt.content}... -> {result}...")
         return {"status": "success", "output": result}
     except Exception as e:
+        logger.error(f"Failed to process prompt: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     
 def load_k8s_config():  # Load Kubernetes config, trying local first then in-cluster
@@ -122,29 +125,29 @@ def load_k8s_config():  # Load Kubernetes config, trying local first then in-clu
 
 @app.get("/get_log")
 async def get_log():
-
-    log_search_pattern = f'/app/data/*.log'
-    log_files = glob.glob(log_search_pattern)
+    patterns = [f'/app/data/*backend.log', f'/app/data/*train_job.log']
+    output = {}
     
-    if not log_files:
-        raise HTTPException(
-            status_code=404, 
-            detail=f"No log files found matching prefix: {pattern}"
-        )
+    for pattern in patterns:
+        files = glob.glob(pattern)
+        if not files:
+            continue
+            
+        # Get the latest file for this specific pattern
+        latest_path = max(files, key=os.path.getmtime)
+        
+        try:
+            # Efficiently get last 100 lines without loading the whole file
+            with open(latest_path, "r") as f:
+                last_lines = deque(f, maxlen=100)
+                output[os.path.basename(latest_path)] = "".join(last_lines)
+        except Exception as e:
+            output[os.path.basename(latest_path)] = f"Error: {str(e)}"
 
-    latest_log_path = max(log_files, key=os.path.getmtime)
+    if not output:
+        raise HTTPException(status_code=404, detail="No log files found.")
 
-    try:
-        with open(latest_log_path, "r") as f:
-            lines = f.readlines()
-            last_lines = lines[-100:] if len(lines) > 100 else lines
-            return {
-                "filename": os.path.basename(latest_log_path),
-                "log": "".join(last_lines)
-            }
-    except Exception as e:
-        return {"error": f"Failed to read {latest_log_path}: {str(e)}"}
-
+    return output
 
 @app.get("/health")
 async def health():

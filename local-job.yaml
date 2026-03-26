@@ -16,10 +16,9 @@ spec:
         runAsGroup: 1000
       containers:
       - name: trainer
-        # Use your local image tag
-        image: sagan-backend:local
-        imagePullPolicy: Never
-        command: ["/opt/venv-backend/bin/python"]
+        image: sagan-backend:latest
+        imagePullPolicy: IfNotPresent
+        command: ["/app/.venv/bin/python"]
         args: ["train_job.py"] 
         resources:
           requests:
@@ -33,6 +32,5 @@ spec:
           name: local-data-vol
       volumes:
       - name: local-data-vol
-        # FIX: Mount the shared PVC instead of an emptyDir
         persistentVolumeClaim:
           claimName: sagan-pvc

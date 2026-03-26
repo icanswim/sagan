@@ -11,7 +11,7 @@ from cosmosis.learning import Learn, Metric, Selector
 from cosmosis.model import GPT
 
 
-Metric.setup_logging(log_name='train_job', log_dir='/app/data/')
+logger = Metric.setup_logging(log_name='train_job', log_dir='/app/data/')
 
 def run_training():
     dir = "/app/data/"
@@ -35,9 +35,6 @@ def run_training():
                 }
 
     logger.info("Initializing Learner for GKE Training Job...")
-
-    #_metric = Metric(dir=dir)
-    logger.info("Metric initialized successfully.")
     
     learner = Learn(
         [TinyShakes], GPT, Metric=Metric, Sampler=Selector, 
