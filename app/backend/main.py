@@ -19,7 +19,7 @@ from cosmosis.learning import Learn, Metric, Selector
 from cosmosis.model import GPT
 from cosmosis.dataset import AsTensor
 
-logger = Metric.setup_logging(log_name='backend', log_dir='/app/data/')
+logger = Metric.setup_logging(log_name='backend.main', log_dir='/app/data')
 
 class TextData(BaseModel):
     content: str
@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
 
     load_k8s_config()
 
-    dir = "/app/data/"
+    dir = "/app/data"
     d_gen = 25 # dimension generate number of tokens
     d_vocab = 50304 # dimension vocabulary
     d_vec = 384 # dimension embedding vector
@@ -47,7 +47,6 @@ async def lifespan(app: FastAPI):
     ds_param = {'train_param': {'transforms': {'tokens': [AsTensor(long)],
                                                'y': [AsTensor(long)],
                                                'position': [AsTensor(long)]},
-                                'd_seq': d_pos,
                                 'n': 1000,
                                 'dir': dir,
                                 'prompt': None},
@@ -66,8 +65,7 @@ async def lifespan(app: FastAPI):
                                    'position': (d_pos, d_vec, None, True)},
                     } 
                                         
-    metric_param = {'dir': dir, 
-                    'metric_name': 'transformer'}                        
+    metric_param = {'metric_name': 'transformer'}                        
                 
     opt_param = {}
     crit_param = {}
@@ -80,14 +78,14 @@ async def lifespan(app: FastAPI):
         model_param=model_param, ds_param=ds_param, metric_param=metric_param,
         opt_param=opt_param, crit_param=crit_param, sample_param=sample_param, 
         sched_param=sched_param,
-        dir=dir, save_model=False, load_model='tinyshakes384.pt', 
+        dir=dir, save_model=False, load_model='tinyshakes384', 
         gpu=False)
     
     app.state.model_lock = threading.Lock()
+    logger.info("main.lifespan inference engine initialized..")
     yield
 
 app = FastAPI(lifespan=lifespan)
-
 
 @app.post("/train")
 async def trigger_training():
@@ -110,7 +108,7 @@ async def trigger_training():
                             name="trainer",
                             image="sagan-backend", 
                             image_pull_policy="Never",   
-                            command=["python", "train_job.py"],
+                            command=["/app/.venv/bin/python", "-u", "train_job.py"],
                             volume_mounts=[client.V1VolumeMount(name="data-storage", 
                                                                 mount_path="/app/data")],
                             resources=client.V1ResourceRequirements(
@@ -129,12 +127,12 @@ async def trigger_training():
             )
         )
         batch_v1.create_namespaced_job(namespace="sagan-app", body=job)
-        logger.info(f"🚀 Launched training job '{job_name}' in 'sagan-app' namespace.")
-        return {"message": "Job launched in sagan-app namespace", "job_id": job_name}
+        logger.info(f"main.trigger_training train job: '{job_name}' in 'sagan-app' namespace.")
+        return {"message": "main.trigger_training train job launched...", "job_id": job_name}
     except Exception as e:
-        logger.error(f"Launch failed: {e}")
+        logger.error(f"main.trigger_training train job failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    
+    return {"message": "main.trigger_training train job complete...", "job_id": job_name}
 @app.post("/prompt")
 async def handle_text(request: Request, prompt: TextData):
     learner = request.app.state.learner
@@ -145,44 +143,111 @@ async def handle_text(request: Request, prompt: TextData):
     try:
         response = await run_sync(locked_predict, prompt.content)
         logger.info(f"prompt: {prompt.content}\nresponse {response}")
-        return {"response": response}
+        return {"main.handle_text": response}
     except Exception as e:
-        logger.error(f"Failed to process prompt: {e}")
+        logger.error(f"main.handle_text failed to process prompt: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     
 @app.get("/get_log")
 async def get_log():
-    log_dir = "/app/data/"
-    # Pattern must have wildcards to catch the timestamp
-    patterns = [f'{log_dir}*backend*.log', f'{log_dir}*train_job*.log']
+    log_dir = "/app/data"
     output = {}
+
+    # Force a sync with GCS Fuse
+    try:
+        os.utime(log_dir, None) # "Touch" the directory to invalidate cache
+    except:
+        pass
     
-    # Force GCS Fuse to refresh its file list
-    try: os.listdir(log_dir)
-    except: pass
-
-    for pattern in patterns:
-        files = glob.glob(pattern)
-        if not files:
-            continue
-            
-        # Get the newest log file based on modified time
-        latest_path = max(files, key=os.path.getmtime)
+    try:
+        # FORCE GCS Fuse to refresh its metadata by listing the directory
+        all_files = os.listdir(log_dir)
         
-        try:
-            with open(latest_path, "r") as f:
-                # Read the last 100 lines
-                last_lines = deque(f, maxlen=100)
-                output[os.path.basename(latest_path)] = "".join(last_lines)
-        except Exception as e:
-            output[os.path.basename(latest_path)] = f"Read Error: {str(e)}"
-
-    if not output:
-        # If this hits, the glob patterns are definitely the culprit
-        raise HTTPException(status_code=404, detail=f"No matches for {patterns}")
-
+        # Manually filter for our log types
+        targets = ['backend', 'train_job']
+        
+        for target in targets:
+            # Find all files matching the target name
+            matches = [f for f in all_files if target in f and f.endswith('.log')]
+            
+            if matches:
+                # Sort by filename (which includes the timestamp) to get the latest
+                latest_file = sorted(matches)[-1]
+                full_path = os.path.join(log_dir, latest_file)
+                
+                with open(full_path, "r") as f:
+                    # Read only the last 100 lines to keep the response light
+                    last_lines = deque(f, maxlen=100)
+                    output[latest_file] = "".join(last_lines)
+                    
+    except Exception as e:
+        # Log the error on the backend so you can see it in kubectl logs
+        print(f"Log read error: {e}")
+    
+    # Returning an empty dict {} is better than a 404 for Streamlit
     return output
 
+@app.get("/job_status")
+async def get_job_status():
+    try:
+        batch_v1 = client.BatchV1Api()
+        # List jobs in the namespace, sorted by creation timestamp
+        jobs = batch_v1.list_namespaced_job(namespace="sagan-app")
+        if not jobs.items:
+            return {"main.get_job_status": "No Jobs Found", "color": "gray"}
+
+        # Get the latest job
+        latest_job = sorted(jobs.items, key=lambda x: x.metadata.creation_timestamp)[-1]
+        name = latest_job.metadata.name
+        status = latest_job.status
+
+        if status.active:
+            return {"main.get_job_status": "Running 🏃", "color": "blue", "name": name}
+        if status.succeeded:
+            return {"main.get_job_status": "Succeeded ✅", "color": "green", "name": name}
+        if status.failed:
+            return {"main.get_job_status": "Failed ❌", "color": "red", "name": name}
+            
+        return {"main.get_job_status": "Pending ⏳", "color": "orange", "name": name}
+    except Exception as e:
+        return {"main.get_job_status": f"Error: {str(e)}", "color": "red"}
+    
+@app.delete("/stop_train")
+async def stop_training():
+    try:
+        batch_v1 = client.BatchV1Api()
+        # Find all jobs in our specific namespace
+        jobs = batch_v1.list_namespaced_job(namespace="sagan-app")
+        
+        if not jobs.items:
+            return {"main.stop_training": "No active jobs to stop."}
+
+        for job in jobs.items:
+            batch_v1.delete_namespaced_job(
+                name=job.metadata.name, 
+                namespace="sagan-app",
+                propagation_policy="Foreground" 
+            )
+            logger.info(f"main.stop_training terminated training job: {job.metadata.name}")
+
+        return {"main.stop_training": f"Stopped {len(jobs.items)} training job(s)."}
+    except Exception as e:
+        logger.error(f"main.stop_training failed to stop jobs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))  
+    
+@app.post("/reload_model")
+async def reload_model():
+    # Use the lock you already defined in lifespan
+    with app.state.model_lock:
+        try:
+            # Re-trigger the loading logic you just shared
+            # Assuming 'learner' is stored in app.state
+            app.state.learner.load_model('tinyshakes384.pth')
+            return {"main.reload_model": "weights updated successfully!"}
+        except Exception as e:
+            logger.error(f"main.reload_model failed to reload model: {e}")
+            return {"main.reload_model": f"reload failed: {str(e)}"}
+        
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "mode": "cpu"}  
+    return {"main.health": "healthy", "mode": "cpu"}  

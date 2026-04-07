@@ -3,7 +3,6 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 WORKDIR /app
 
-# Install dependencies into a standard location
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=uv.lock,target=uv.lock \
@@ -12,12 +11,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Stage 2: Runtime
 FROM python:3.12-slim-bookworm
 WORKDIR /app
+ENV PYTHONUNBUFFERED=1
 
-# Consistent user/group setup (UID/GID 1000 is standard for local dev)
 RUN groupadd -g 1000 appuser && \
     useradd -r -u 1000 -g appuser -m appuser
 
-# Copy venv and code with consistent ownership
 COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
 COPY --chown=appuser:appuser . .
 

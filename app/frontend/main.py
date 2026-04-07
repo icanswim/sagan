@@ -19,6 +19,16 @@ st.caption(f"Connected to backend at: {BACKEND_URL}")
 
 @st.fragment(run_every="5s")
 def sync_logs_fragment():
+    try:
+        status_res = requests.get(f"{BACKEND_URL}/job_status", timeout=2.0)
+        if status_res.status_code == 200:
+            job_info = status_res.json()
+            st.markdown(f"**Current Job:** `{job_info.get('name', 'N/A')}`")
+            st.markdown(f"**Status:** :{job_info['color']}[{job_info['status']}]")
+    except:
+        st.caption("Unable to fetch Job status.")
+    
+    st.divider()
     st.subheader("📝 Training Monitor")
     stream_enabled = st.toggle("Live Stream", value=True)
     log_area = st.empty()
@@ -67,10 +77,24 @@ with t1:
 
 with t2:
     st.info("Triggering training launches a GKE Job.")
-    if st.button("🔥 Start Training", type="primary"):
-        try:
-            res = requests.post(f"{BACKEND_URL}/train", timeout=10)
-            data = res.json()
-            st.success(f"{data.get('message')} (ID: {data.get('job_id')})")
-        except Exception as e:
-            st.error(f"Failed to launch training: {e}")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🔥 Start Training", type="primary", use_container_width=True):
+            try:
+                res = requests.post(f"{BACKEND_URL}/train", timeout=10)
+                st.success(f"Job Launched: {res.json().get('job_id')}")
+            except Exception as e:
+                st.error(f"Launch failed: {e}")
+
+    with col2:
+        if st.button("🛑 Stop Training", type="secondary", use_container_width=True):
+            try:
+                res = requests.delete(f"{BACKEND_URL}/stop_train", timeout=10)
+                st.warning(res.json().get("message"))
+            except Exception as e:
+                st.error(f"Stop request failed: {e}")
+
+        if st.button("🔄 Sync Backend with New Weights"):
+            res = requests.post(f"{BACKEND_URL}/reload_model")
+            st.toast(res.json().get("status"))
