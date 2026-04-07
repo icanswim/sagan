@@ -227,10 +227,13 @@ gcloud container clusters delete sagan-cluster --zone us-central1-a
 gcloud container clusters resize sagan-cluster --zone us-central1-a --node-pool spot-backend-pool --num-nodes 0
 gcloud container clusters resize sagan-cluster --zone us-central1-a --node-pool spot-frontend-pool --num-nodes 0
 
-
+# local skaffold dev minikube
 minikube start --cpus 4 --memory 8192
 minikube addons enable istio
 eval $(minikube docker-env)
+minikube image load sagan-backend:latest
+minikube image load sagan-frontend:latest
+minikube image ls
 
 kubectl config use-context minikube
 kubectl config current-context
@@ -256,15 +259,19 @@ kubectl delete jobs,pods --all -n sagan-app
 Ensure your terminal is still synced with Minikube's Docker
 eval $(minikube docker-env)
 
+
 skaffold dev --force=true --port-forward
 
 kubectl get pods -n sagan-app
 
 export BACKEND_POD=$(kubectl get pods -n sagan-app -l app=backend -o jsonpath='{.items[0].metadata.name}')
 echo $BACKEND_POD
-kubectl exec $BACKEND_POD -n sagan-app -- cat /app/data/train_job_20260326_173817.log
 
 
-kubectl exec $BACKEND_POD -n sagan-app -- ls /app/data/
+kubectl exec backend-deployment-988c4d477-fjvxh -n sagan-app -- cat /app/data/backend_20260404_000635.log
+
+
+
+kubectl exec backend-deployment-988c4d477-fjvxh -n sagan-app -- ls /app/data/
 
 
