@@ -1,0 +1,154 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sagan-app
+---
+# Backend Service Account (Workload Identity ready)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sagan-backend-ksa
+  namespace: sagan-app
+  annotations:
+    iam.gke.io/gcp-service-account: sagan-gsa@sagan-5.iam.gserviceaccount.com
+---
+# RBAC for GKE Training Jobs
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: sagan-app
+  name: job-manager-role
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["create", "get", "list", "delete"]
+- apiGroups: [""]
+  resources: ["serviceaccounts", "pods"] # Added pods for job monitoring
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backend-job-manager-binding
+  namespace: sagan-app
+subjects:
+- kind: ServiceAccount
+  name: sagan-backend-ksa
+  namespace: sagan-app
+roleRef:
+  kind: Role
+  name: job-manager-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# Backend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-deployment
+  namespace: sagan-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+      annotations:
+        gke-gcsfuse.google.com: "true" # Enables Cloud Storage Fuse
+    spec:
+      serviceAccountName: sagan-backend-ksa
+      nodeSelector:
+        ://cloud.google.com: "spot-backend-pool" # Updated to standard label
+      tolerations: 
+      - key: "dedicated"
+        operator: "Equal"
+        value: "spot"
+        effect: "NoSchedule"
+      securityContext:
+        fsGroup: 1000
+      containers:
+      - name: backend
+        image: sagan-backend # Skaffold replaces this
+        command: ["/opt/venv-backend/bin/uvicorn"]
+        args: ["main:app", "--host", "0.0.0.0", "--port", "8000"]
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        volumeMounts:
+        - mountPath: "/app/data" 
+          name: fuse-volume
+      volumes:
+      - name: fuse-volume
+        csi:
+          driver: gcsfuse.csi.storage.gke.io
+          volumeAttributes:
+            bucketName: sagan-bucket
+            mountOptions: "uid=1000,gid=1000,file-mode=775,dir-mode=775"
+---
+# Frontend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend-deployment
+  namespace: sagan-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      serviceAccountName: sagan-frontend-ksa
+      nodeSelector:
+        ://cloud.google.com: "spot-frontend-pool"
+      tolerations:
+      - key: "dedicated"
+        operator: "Equal"
+        value: "spot"
+        effect: "NoSchedule"
+      containers:
+      - name: frontend
+        image: sagan-frontend # Skaffold replaces this
+        workingDir: /app
+        command: ["/opt/venv-frontend/bin/streamlit"]
+        args: [
+          "run", "main.py", 
+          "--server.address", "0.0.0.0",
+          "--server.port", "8501",
+          "--browser.serverAddress", "app.wylderhayes.com",
+          "--browser.serverPort", "443"
+        ]
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        env:
+        - name: BACKEND_URL
+          value: "http://backend-service:8000"
+---
+# Frontend Service (GKE External Load Balancer)
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: sagan-app
+spec:
+  type: LoadBalancer # Gives you a public IP in GKE
+  selector:
+    app: frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8501

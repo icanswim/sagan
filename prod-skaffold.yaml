@@ -1,0 +1,30 @@
+apiVersion: skaffold/v4beta13
+kind: Config
+metadata:
+  name: sagan
+build:
+  artifacts:
+    - image: us-central1-docker.pkg.dev/[PROJECT_ID]/[REPO]/sagan-backend
+      context: app/backend
+    - image: us-central1-docker.pkg.dev/[PROJECT_ID]/[REPO]/sagan-frontend
+      context: app/frontend
+  # For GKE, we want to push images to a registry
+  googleCloudBuild:
+    projectId: [PROJECT_ID]
+
+manifests:
+  rawYaml:
+    - istio-class.yaml
+    - deployment.yaml # Use the cleaned-up deployment below
+    - routes.yaml
+    - production-pvc.yaml # GKE storage classes differ from local
+
+profiles:
+  - name: prod
+    activation:
+      - command: run
+    # Use different manifests for prod (e.g., higher replicas, cloud-specific LB)
+    patches:
+      - op: replace
+        path: /deploy/kubectl/manifests
+        value: ["k8s/prod/*.yaml"]

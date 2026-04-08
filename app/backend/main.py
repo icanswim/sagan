@@ -113,7 +113,7 @@ async def trigger_training():
                                                                 mount_path="/app/data")],
                             resources=client.V1ResourceRequirements(
                                 requests={"memory": "512Mi", "cpu": "500m"},
-                                limits={"memory": "1Gi", "cpu": "1000m"}
+                                limits={"memory": "4Gi", "cpu": "1000m"}
                             )
                         )],
                         volumes=[client.V1Volume(

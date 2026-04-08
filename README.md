@@ -57,6 +57,11 @@ gcloud certificate-manager maps list
 gcloud certificate-manager maps entries list --map=sagan-cert-map
 gcloud certificate-manager certificates list
 
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml
+kubectl get crd | grep gateway
+
+
+
 assemble repo  
 
 mkdir app  
@@ -229,7 +234,6 @@ gcloud container clusters resize sagan-cluster --zone us-central1-a --node-pool 
 
 # local skaffold dev minikube
 minikube start --cpus 4 --memory 8192
-minikube addons enable istio
 eval $(minikube docker-env)
 minikube image load sagan-backend:latest
 minikube image load sagan-frontend:latest
@@ -238,17 +242,9 @@ minikube image ls
 kubectl config use-context minikube
 kubectl config current-context
 
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.0.0/standard-install.yaml
-curl -L https://istio.io/downloadIstio > download-istio.sh
-bash download-istio.sh
-Move into the folder (replace x.x.x with the version downloaded)
-cd istio-1.*
-
-Add the binary to your path temporarily
-export PATH=$PWD/bin:$PATH
-
-Install the minimal profile (perfect for local dev)
-istioctl install --set profile=minimal -y
+curl -sL https://istio.io/downloadIstioctl | sh -
+export PATH=$HOME/.istioctl/bin:$PATH 
+istioctl install --set profile=demo -y
 
 Stop and delete everything managed by Skaffold
 skaffold delete

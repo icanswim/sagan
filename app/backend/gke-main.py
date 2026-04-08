@@ -47,7 +47,7 @@ async def lifespan(app: FastAPI):
         model_param=model_param, 
         ds_param=ds_param,
         metric_param=metric_param,
-        dir=dir, save_model='tinyshakes384', load_model='tinyshakes384.pt', gpu=False 
+        dir=dir, save_model='tinyshakes384', load_model='tinyshakes384', gpu=False 
     )
     
     app.state.model_lock = threading.Lock()
