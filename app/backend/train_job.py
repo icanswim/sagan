@@ -1,4 +1,6 @@
+from http.client import HTTPException
 import sys
+import traceback
 
 from torch import long
 from torch.optim import Adam
@@ -14,12 +16,14 @@ logger = Metric.setup_logging(log_name='train_job', log_dir='./data')
 
 def run_training():
     dir = "./data"
-
+    
     d_seq = 25       # dimension sequence length
-    d_gen = 25       # dimension generate number of tokens
+    d_gen = 25       # dimension generate number of tokens in inference
     d_vocab = 50304  # dimension vocabulary
     d_vec = 384      # dimension embedding vector
     d_model = 384    # dimension model input
+
+    assert d_model == d_vec
     
     model_param = {
         'd_model': d_model,
@@ -47,7 +51,7 @@ def run_training():
             'n': 500,
             'd_seq': d_seq,
             'dir': dir,
-            'prompt': None,
+            'prompt': False,
         }
     }
 
@@ -69,7 +73,7 @@ def run_training():
         model_param=model_param, ds_param=ds_param, metric_param=metric_param,
         opt_param=opt_param, crit_param=crit_param, sample_param=sample_param, 
         sched_param=sched_param,
-        dir=dir, batch_size=64, epoch=3, gpu=False,
+        dir=dir, batch_size=32, epoch=3, gpu=False,
         save_model='tinyshakes384', load_model='tinyshakes384'
     )
     
@@ -77,8 +81,11 @@ def run_training():
         out = learner.run_experiment()
         logger.info("train_job complete... {}".format(out))
     except Exception as e:
-        logger.error(f"train_job failed: {str(e)}")
-        sys.exit(1) 
+        full_trace = traceback.format_exc()
+        logger.error(f"main.handle_text failed: {e}\n{full_trace}")
+        raise HTTPException(
+                    status_code=500, 
+                    detail={"message": str(e), "traceback": full_trace})
 
 if __name__ == "__main__":
     run_training()

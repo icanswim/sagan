@@ -2,99 +2,91 @@ import requests
 import streamlit as st
 import os
 
-# 1. Setup Page & CSS for better "Log Reshaping"
+# 1. Setup Page
 st.set_page_config(page_title="Sagan Dashboard", layout="wide")
+BACKEND_URL = os.getenv("BACKEND_URL", "http://backend-service:8000")
 
+# CSS to stabilize the layout height
 st.markdown("""
     <style>
         section[data-testid="stSidebar"] { width: 700px !important; }
-        .stCodeBlock { font-size: 0.75rem !important; }
+        .stCodeBlock { font-size: 0.75rem !important; min-height: 400px; }
+        .status-box { min-height: 80px; }
     </style>
 """, unsafe_allow_html=True)
 
-BACKEND_URL = os.getenv("BACKEND_URL", "http://backend-service:8000")
-
 st.title("🚀 Sagan Dashboard")
-st.caption(f"Connected to backend at: {BACKEND_URL}")
 
-@st.fragment(run_every="5s")
-def sync_logs_fragment():
-    try:
-        status_res = requests.get(f"{BACKEND_URL}/job_status", timeout=2.0)
-        if status_res.status_code == 200:
-            job_info = status_res.json()
-            st.markdown(f"**Current Job:** `{job_info.get('name', 'N/A')}`")
-            st.markdown(f"**Status:** :{job_info['color']}[{job_info['status']}]")
-    except:
-        st.caption("Unable to fetch Job status.")
-    
-    st.divider()
+# 2. Sidebar - Everything must stay inside this 'with' block
+with st.sidebar:
     st.subheader("📝 Training Monitor")
     stream_enabled = st.toggle("Live Stream", value=True)
-    log_area = st.empty()
     
-    if stream_enabled:
-        try:
-            res = requests.get(f"{BACKEND_URL}/get_log", timeout=3.0)
-            if res.status_code == 200:
-                data = res.json()
-                if not data:
-                    log_area.info("Logs are currently empty.")
+    @st.fragment(run_every="5s")
+    def sync_sidebar_fragment(enabled):
+        # using a container inside the fragment ensures elements are replaced, not added
+        with st.container():
+            try:
+                res = requests.get(f"{BACKEND_URL}/job_status", timeout=1.5)
+                if res.status_code == 200:
+                    job = res.json()
+                    st.caption(f"🟢 Connected to: {BACKEND_URL}")
+                    st.markdown(f"**Job:** `{job.get('name', 'N/A')}` | **Status:** :{job.get('color', 'grey')}[{job.get('status', 'Unknown')}]")
                 else:
-                    combined_text = ""
-                    for filename, content in data.items():
-                        combined_text += f"=== {filename} ===\n{content}\n\n"
-                    # Show the last 10,000 characters
-                    log_area.code(combined_text[-10000:], language="text")
-            else:
-                log_area.warning(f"Backend Status: {res.status_code}")
-        except Exception:
-            log_area.warning("Connecting to backend...")
+                    st.caption(f"🔴 Backend Error: {res.status_code}")
+            except Exception:
+                st.caption("❌ Backend unreachable...")
 
-with st.sidebar:
-    sync_logs_fragment()
+            st.divider()
+            
+            if enabled:
+                try:
+                    log_res = requests.get(f"{BACKEND_URL}/get_log", timeout=2.0)
+                    if log_res.status_code == 200:
+                        logs = log_res.json()
+                        combined = "\n".join([f"=== {k} ===\n{v}" for k, v in logs.items()])
+                        st.code(combined[-8000:], language="text")
+                    else:
+                        st.info("Logs temporarily unavailable.")
+                except Exception:
+                    st.warning("Connecting to logs...")
+
+    # EXECUTION: Call the fragment while STILL inside the sidebar context
+    sync_sidebar_fragment(stream_enabled)
 
 # 3. Main UI Tabs
 t1, t2 = st.tabs(["💬 Inference", "🛠️ Training Control"])
 
 with t1:
-    prompt_input = st.text_area("Hey Shakespeare...", placeholder="To be or not to be...", height=150)
-    if st.button("Generate Text", type="primary"):
-        if not prompt_input:
-            st.warning("Please enter a prompt first.")
-        else:
-            with st.spinner("Generating..."):
-                try:
-                    res = requests.post(f"{BACKEND_URL}/prompt", json={"content": prompt_input}, timeout=15)
-                    if res.status_code == 200:
-                        st.success("Result:")
-                        # FIX: Matches your backend's 'response' key
-                        st.write(res.json().get("response", "No response field in JSON."))
-                    else:
-                        st.error(f"Error: {res.text}")
-                except Exception as e:
-                    st.error(f"Failed to reach backend: {e}")
+    prompt = st.text_area("Prompt", placeholder="To be or not to be...", height=150)
+    if st.button("Generate", type="primary"):
+        with st.spinner("Thinking..."):
+            try:
+                res = requests.post(f"{BACKEND_URL}/prompt", json={"content": prompt}, timeout=15)
+                if res.status_code == 200:
+                    st.write(res.json().get("response"))
+                else:
+                    # Get the detail dict we sent from the backend
+                    err = res.json().get("detail", {})
+                    st.error(f"Backend Error: {err.get('message', 'Unknown Error')}")
+                    
+                    # Show the trace in a collapsible box to avoid "jumping"
+                    if "traceback" in err:
+                        with st.expander("🔍 View Full Stack Trace"):
+                            st.code(err["traceback"], language="python")
+            except Exception as e:
+                st.error(f"Failed to reach backend: {e}")
 
 with t2:
     st.info("Triggering training launches a GKE Job.")
     col1, col2 = st.columns(2)
-    
     with col1:
         if st.button("🔥 Start Training", type="primary", use_container_width=True):
-            try:
-                res = requests.post(f"{BACKEND_URL}/train", timeout=10)
-                st.success(f"Job Launched: {res.json().get('job_id')}")
-            except Exception as e:
-                st.error(f"Launch failed: {e}")
-
+            requests.post(f"{BACKEND_URL}/train")
     with col2:
         if st.button("🛑 Stop Training", type="secondary", use_container_width=True):
-            try:
-                res = requests.delete(f"{BACKEND_URL}/stop_train", timeout=10)
-                st.warning(res.json().get("message"))
-            except Exception as e:
-                st.error(f"Stop request failed: {e}")
-
-        if st.button("🔄 Sync Backend with New Weights"):
-            res = requests.post(f"{BACKEND_URL}/reload_model")
-            st.toast(res.json().get("status"))
+            requests.delete(f"{BACKEND_URL}/stop_train")
+    
+    if st.button("🔄 Sync Backend with New Weights", use_container_width=True):
+        res = requests.post(f"{BACKEND_URL}/reload_model")
+        st.toast(res.json().get("status", "Syncing..."))

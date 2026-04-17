@@ -1,4 +1,4 @@
-import os, uuid, glob, threading
+import os, uuid, threading, traceback
 from contextlib import asynccontextmanager
 from collections import deque
 
@@ -36,18 +36,21 @@ async def lifespan(app: FastAPI):
     load_k8s_config()
 
     dir = "/app/data"
-    d_gen = 25 # dimension generate number of tokens
+    d_seq = 25 # dimension sequence (context window size/prompt length)
+    d_gen = 50 # dimension generate number of tokens in inference
     d_vocab = 50304 # dimension vocabulary
     d_vec = 384 # dimension embedding vector
     d_model = 384 # dimension model input
-    d_pos = 25 # dimension positional encoding d_pos >= max(len(prompt_tokens), d_gen)
 
+    # d_gen must be >= len(prompt)
     assert d_model == d_vec
+    assert d_gen >= d_seq 
 
     ds_param = {'train_param': {'transforms': {'tokens': [AsTensor(long)],
                                                'y': [AsTensor(long)],
                                                'position': [AsTensor(long)]},
-                                'n': 1000,
+                                'n': 1, # set to 1 for inference
+                                'd_seq': d_seq, 
                                 'dir': dir,
                                 'prompt': None},
                 }
@@ -62,7 +65,7 @@ async def lifespan(app: FastAPI):
                    'top_k': 3,
                    'embed_param': {'tokens': (d_vocab, d_vec, None, True), 
                                    #'y': (d_vocab, d_vec, None, True),
-                                   'position': (d_pos, d_vec, None, True)},
+                                   'position': (d_gen, d_vec, None, True)},
                     } 
                                         
     metric_param = {'metric_name': 'transformer'}                        
@@ -132,71 +135,74 @@ async def trigger_training():
     except Exception as e:
         logger.error(f"main.trigger_training train job failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    return {"message": "main.trigger_training train job complete...", "job_id": job_name}
+    
 @app.post("/prompt")
 async def handle_text(request: Request, prompt: TextData):
     learner = request.app.state.learner
     lock = request.app.state.model_lock
+    
     def locked_predict(text_input: str):
         with lock:
             return learner.run_experiment(prompt=text_input)
     try:
         response = await run_sync(locked_predict, prompt.content)
         logger.info(f"prompt: {prompt.content}\nresponse {response}")
-        return {"main.handle_text": response}
+        # Match your frontend's expected key "response"
+        return {"response": response} 
     except Exception as e:
-        logger.error(f"main.handle_text failed to process prompt: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Capture the full trace
+        full_trace = traceback.format_exc()
+        logger.error(f"main.handle_text failed: {e}\n{full_trace}")
+        # Send both the message and the trace to Streamlit
+        raise HTTPException(
+            status_code=500, 
+            detail={"message": str(e), "traceback": full_trace}
+        )
     
 @app.get("/get_log")
 async def get_log():
     log_dir = "/app/data"
     output = {}
 
-    # Force a sync with GCS Fuse
+    # force a sync with GCS Fuse
     try:
-        os.utime(log_dir, None) # "Touch" the directory to invalidate cache
+        os.utime(log_dir, None) # touch the directory to invalidate cache
     except:
         pass
     
     try:
-        # FORCE GCS Fuse to refresh its metadata by listing the directory
+        # force GCS Fuse to refresh its metadata by listing the directory
         all_files = os.listdir(log_dir)
         
-        # Manually filter for our log types
         targets = ['backend', 'train_job']
         
         for target in targets:
-            # Find all files matching the target name
             matches = [f for f in all_files if target in f and f.endswith('.log')]
             
             if matches:
-                # Sort by filename (which includes the timestamp) to get the latest
+                # sort by filename (which includes the timestamp) to get the latest
                 latest_file = sorted(matches)[-1]
                 full_path = os.path.join(log_dir, latest_file)
                 
                 with open(full_path, "r") as f:
-                    # Read only the last 100 lines to keep the response light
+                    # read the last 100 lines
                     last_lines = deque(f, maxlen=100)
                     output[latest_file] = "".join(last_lines)
                     
     except Exception as e:
-        # Log the error on the backend so you can see it in kubectl logs
-        print(f"Log read error: {e}")
+        logger.error(f"Log read error: {e}")
     
-    # Returning an empty dict {} is better than a 404 for Streamlit
     return output
 
 @app.get("/job_status")
 async def get_job_status():
     try:
         batch_v1 = client.BatchV1Api()
-        # List jobs in the namespace, sorted by creation timestamp
+        # list jobs in the namespace, sorted by creation timestamp
         jobs = batch_v1.list_namespaced_job(namespace="sagan-app")
         if not jobs.items:
             return {"main.get_job_status": "No Jobs Found", "color": "gray"}
 
-        # Get the latest job
         latest_job = sorted(jobs.items, key=lambda x: x.metadata.creation_timestamp)[-1]
         name = latest_job.metadata.name
         status = latest_job.status
@@ -216,7 +222,6 @@ async def get_job_status():
 async def stop_training():
     try:
         batch_v1 = client.BatchV1Api()
-        # Find all jobs in our specific namespace
         jobs = batch_v1.list_namespaced_job(namespace="sagan-app")
         
         if not jobs.items:
@@ -237,11 +242,8 @@ async def stop_training():
     
 @app.post("/reload_model")
 async def reload_model():
-    # Use the lock you already defined in lifespan
     with app.state.model_lock:
         try:
-            # Re-trigger the loading logic you just shared
-            # Assuming 'learner' is stored in app.state
             app.state.learner.load_model('tinyshakes384.pth')
             return {"main.reload_model": "weights updated successfully!"}
         except Exception as e:

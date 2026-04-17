@@ -264,10 +264,10 @@ export BACKEND_POD=$(kubectl get pods -n sagan-app -l app=backend -o jsonpath='{
 echo $BACKEND_POD
 
 
-kubectl exec backend-deployment-988c4d477-fjvxh -n sagan-app -- cat /app/data/backend_20260404_000635.log
+kubectl exec backend-deployment-5c76b9998d-4zhq2 -n sagan-app -- cat /app/data/train_job_20260409_164926.log
 
 
 
-kubectl exec backend-deployment-988c4d477-fjvxh -n sagan-app -- ls /app/data/
+kubectl exec backend-deployment-5c76b9998d-4zhq2 -n sagan-app -- ls /app/data/
 
 
