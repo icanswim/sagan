@@ -62,15 +62,13 @@ with t1:
     if st.button("Generate", type="primary"):
         with st.spinner("Thinking..."):
             try:
-                res = requests.post(f"{BACKEND_URL}/prompt", json={"content": prompt}, timeout=15)
+                res = requests.post(f"{BACKEND_URL}/prompt", json={"content": prompt}, timeout=30)
                 if res.status_code == 200:
                     st.write(res.json().get("response"))
                 else:
-                    # Get the detail dict we sent from the backend
                     err = res.json().get("detail", {})
                     st.error(f"Backend Error: {err.get('message', 'Unknown Error')}")
                     
-                    # Show the trace in a collapsible box to avoid "jumping"
                     if "traceback" in err:
                         with st.expander("🔍 View Full Stack Trace"):
                             st.code(err["traceback"], language="python")

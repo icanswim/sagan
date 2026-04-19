@@ -80,7 +80,7 @@ async def lifespan(app: FastAPI):
         Optimizer=None, Scheduler=None, Criterion=None,
         model_param=model_param, ds_param=ds_param, metric_param=metric_param,
         opt_param=opt_param, crit_param=crit_param, sample_param=sample_param, 
-        sched_param=sched_param,
+        sched_param=sched_param, batch_size=1, epoch=1,
         dir=dir, save_model=False, load_model='tinyshakes384', 
         gpu=False)
     
@@ -138,6 +138,7 @@ async def trigger_training():
     
 @app.post("/prompt")
 async def handle_text(request: Request, prompt: TextData):
+    print(f"DEBUG: Received prompt: {prompt.content}")
     learner = request.app.state.learner
     lock = request.app.state.model_lock
     
@@ -147,13 +148,11 @@ async def handle_text(request: Request, prompt: TextData):
     try:
         response = await run_sync(locked_predict, prompt.content)
         logger.info(f"prompt: {prompt.content}\nresponse {response}")
-        # Match your frontend's expected key "response"
+        # match frontend's expected key "response"
         return {"response": response} 
     except Exception as e:
-        # Capture the full trace
         full_trace = traceback.format_exc()
         logger.error(f"main.handle_text failed: {e}\n{full_trace}")
-        # Send both the message and the trace to Streamlit
         raise HTTPException(
             status_code=500, 
             detail={"message": str(e), "traceback": full_trace}
@@ -244,7 +243,7 @@ async def stop_training():
 async def reload_model():
     with app.state.model_lock:
         try:
-            app.state.learner.load_model('tinyshakes384.pth')
+            app.state.learner.reload_model('tinyshakes384')
             return {"main.reload_model": "weights updated successfully!"}
         except Exception as e:
             logger.error(f"main.reload_model failed to reload model: {e}")
