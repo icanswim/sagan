@@ -20,7 +20,7 @@ manifests:
     - local/local-gateway.yaml
     - local/pvc.yaml
     - routes.yaml
-    - k8s-rbac.yaml
+    - local/k8s-rbac.yaml
 
 portForward:
   - resourceType: service
