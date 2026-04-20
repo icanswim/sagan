@@ -27,7 +27,7 @@ spec:
       containers:
       - name: trainer
         image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:v4
-        command: ["/opt/venv-backend/bin/python"]
+        command: ["/app/.venv/bin/python"]
         args: ["train_job.py"] 
         resources:
           requests:

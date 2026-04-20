@@ -2,7 +2,11 @@
 A utility for serving containerized data science applications. 
 
 # stack
-gke  
+skaffold for local dev
+minikube for local dev
+gke
+    gcloud
+    kubectl
 docker  
 uv  
 fastapi  
@@ -10,10 +14,8 @@ streamlit
 
 ## workflow
 
-https://github.com/GoogleCloudPlatform/gke-networking-recipes
-
 gcloud auth login  
-create new gcloud project  
+gcloud projects create PROJECT_ID
 gcloud config set project PROJECT_ID  
 gcloud components install skaffold
 
@@ -23,24 +25,27 @@ export IMAGE_TAG=v4
 export FRONT_IMAGE_URI="us-central1-docker.pkg.dev/${PROJECT_ID}/${IMAGE_REPO_NAME}/sagan-frontend:${IMAGE_TAG}"  
 export BACK_IMAGE_URI="us-central1-docker.pkg.dev/${PROJECT_ID}/${IMAGE_REPO_NAME}/sagan-backend:${IMAGE_TAG}" 
 
-glcoud services enable compute.googleapis.com  
+gcloud services enable compute.googleapis.com
 gcloud compute addresses create sagan-ingress-ip --global  
 gcloud compute addresses describe sagan-ingress-ip --global --format="get(address)"  
-create DNS redirect for app.wylderhayes.com to sagan-ingress-ip  
+#create DNS redirect for app.wylderhayes.com to sagan-ingress-ip  
 
 gcloud services enable artifactregistry.googleapis.com  
 gcloud artifacts repositories create ${IMAGE_REPO_NAME} --repository-format=docker --location=us-central1 --description="sagan-app"  
-set IMAGE_URI in deployment.yaml
+#set IMAGE_URIs in deployment.yaml
 
+#enable docker to work with gcloud
 gcloud auth configure-docker us-central1-docker.pkg.dev  
 
 gcloud certificate-manager dns-authorizations create sagan-dns-auth --domain="app.wylderhayes.com"
 gcloud certificate-manager dns-authorizations list  
 
-update dns provider
-
+#update dns provider
 gcloud certificate-manager dns-authorizations describe sagan-dns-auth
-create CNAME dns record
+#create CNAME dns record
+gcloud certificate-manager certificates create sagan-managed-cert \
+    --domains='app.wylderhayes.com' \
+    --dns-authorizations=sagan-dns-auth
 gcloud certificate-manager certificates describe sagan-managed-cert
 
 gcloud certificate-manager maps create sagan-cert-map
@@ -49,20 +54,111 @@ gcloud certificate-manager maps entries create sagan-map-entry \
     --hostname="app.wylderhayes.com" \
     --certificates=sagan-managed-cert
 gcloud certificate-manager maps describe sagan-cert-map
+gcloud certificate-manager maps entries list --map=sagan-cert-map
 
-check io
+#check io
 
 gcloud compute addresses list --global
 gcloud certificate-manager maps list
 gcloud certificate-manager maps entries list --map=sagan-cert-map
 gcloud certificate-manager certificates list
 
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml
-kubectl get crd | grep gateway
+gcloud services enable container.googleapis.com  
 
+gcloud container clusters create sagan-cluster \
+    --zone=us-central1-a \
+    --machine-type e2-medium \
+    --num-nodes=1  
 
+gcloud container clusters get-credentials sagan-cluster --zone us-central1-a 
 
-assemble repo  
+gcloud container clusters update sagan-cluster \
+    --location=us-central1-a \
+    --gateway-api=standard
+
+kubectl create namespace sagan-app --save-config
+
+gcloud iam service-accounts create sagan-gsa \
+    --display-name="sagan gke service account"
+
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+    --member="serviceAccount:sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --role="roles/container.defaultNodeServiceAccount"
+
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+    --member="serviceAccount:sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --role="roles/storage.objectViewer"
+
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+    --member="serviceAccount:sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --role="roles/artifactregistry.reader"
+
+kubectl create serviceaccount sagan-backend-ksa -n sagan-app
+
+gcloud iam service-accounts add-iam-policy-binding sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com \
+    --role="roles/iam.workloadIdentityUser" \
+    --member="serviceAccount:${PROJECT_ID}.svc.id.goog[sagan-app/sagan-backend-ksa]"
+
+kubectl annotate serviceaccount sagan-backend-ksa \
+    --namespace sagan-app \
+    iam.gke.io/gcp-service-account=sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com
+
+kubectl create serviceaccount sagan-frontend-ksa -n sagan-app
+
+gcloud iam service-accounts add-iam-policy-binding sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com \
+    --role="roles/iam.workloadIdentityUser" \
+    --member="serviceAccount:${PROJECT_ID}.svc.id.goog[sagan-app/sagan-frontend-ksa]"
+
+kubectl annotate serviceaccount sagan-frontend-ksa \
+    --namespace sagan-app \
+    iam.gke.io/gcp-service-account=sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com
+
+gcloud container clusters update sagan-cluster \
+    --location=us-central1-a \
+    --workload-pool=${PROJECT_ID}.svc.id.goog
+
+gcloud container node-pools create spot-frontend-pool \
+    --cluster sagan-cluster \
+    --spot \
+    --zone us-central1-a \
+    --machine-type e2-medium \
+    --node-taints dedicated=spot:NoSchedule \
+    --service-account=sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com \
+    --num-nodes 1 \
+    --workload-metadata=GKE_METADATA
+
+gcloud container node-pools create spot-backend-pool \
+    --cluster sagan-cluster \
+    --spot \
+    --zone us-central1-a \
+    --machine-type e2-standard-2 \
+    --disk-size 40 \
+    --disk-type pd-balanced \
+    --node-taints dedicated=spot:NoSchedule \
+    --service-account=sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com \
+    --num-nodes 1 \
+    --workload-metadata=GKE_METADATA
+
+gcloud container clusters update sagan-cluster \
+    --update-addons GcsFuseCsiDriver=ENABLED \
+    --location=us-central1-a 
+gcloud container clusters describe sagan-cluster \
+    --location us-central1-a \
+    --format="value(config.addonsConfig.gcsFuseCsiDriverConfig.enabled)"
+gcloud storage buckets create gs://sagan-bucket \
+    --location=us-central1 \
+    --uniform-bucket-level-access \
+    --enable-hierarchical-namespace
+gcloud storage buckets add-iam-policy-binding gs://sagan-bucket \
+    --member="serviceAccount:sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --role="roles/storage.objectUser"
+kubectl get daemonset gcs-fuse-csi-driver -n kube-system
+
+gcloud storage buckets update gs://sagan-bucket --lifecycle-file=lifecycle.json
+gcloud storage buckets describe gs://sagan-bucket --format="json(lifecycle)"
+kubectl label namespace sagan-app gke-gcsfuse-sidecar-injection=enabled
+
+#assemble repo  
 
 mkdir app  
 create deployment.yaml  
@@ -84,107 +180,13 @@ docker run -it --rm -p 8501:8501 --name frontend-container ${FRONT_IMAGE_URI} # 
 docker push ${FRONT_IMAGE_URI}  
 docker push ${BACK_IMAGE_URI}
 
-gcloud services enable container.googleapis.com  
-
-gcloud container clusters create sagan-cluster \
-    --zone=us-central1-a \
-    --machine-type e2-medium \
-    --num-nodes=1  
-
-gcloud container clusters get-credentials sagan-cluster --zone us-central1-a 
-
-gcloud container clusters update sagan-cluster \
-    --location=us-central1-a \
-    --gateway-api=standard
-
-kubectl create namespace sagan-app --save-config
-
-gcloud iam service-accounts create sagan-gsa \
-    --display-name="sagan gke service account"
-
-gcloud projects add-iam-policy-binding sagan-5 \
-    --member="serviceAccount:sagan-gsa@sagan-5.iam.gserviceaccount.com" \
-    --role="roles/container.defaultNodeServiceAccount"
-
-gcloud projects add-iam-policy-binding sagan-5 \
-    --member="serviceAccount:sagan-gsa@sagan-5.iam.gserviceaccount.com" \
-    --role="roles/storage.objectViewer"
-
-gcloud projects add-iam-policy-binding sagan-5 \
-    --member="serviceAccount:sagan-gsa@sagan-5.iam.gserviceaccount.com" \
-    --role="roles/artifactregistry.reader"
-
-kubectl create serviceaccount sagan-backend-ksa -n sagan-app
-
-gcloud iam service-accounts add-iam-policy-binding sagan-gsa@sagan-5.iam.gserviceaccount.com \
-    --role="roles/iam.workloadIdentityUser" \
-    --member="serviceAccount:sagan-5.svc.id.goog[sagan-app/sagan-backend-ksa]"
-
-kubectl annotate serviceaccount sagan-backend-ksa \
-    --namespace sagan-app \
-    iam.gke.io/gcp-service-account=sagan-gsa@sagan-5.iam.gserviceaccount.com
-
-kubectl create serviceaccount sagan-frontend-ksa -n sagan-app
-
-gcloud iam service-accounts add-iam-policy-binding sagan-gsa@sagan-5.iam.gserviceaccount.com \
-    --role="roles/iam.workloadIdentityUser" \
-    --member="serviceAccount:sagan-5.svc.id.goog[sagan-app/sagan-frontend-ksa]"
-
-kubectl annotate serviceaccount sagan-frontend-ksa \
-    --namespace sagan-app \
-    iam.gke.io/gcp-service-account=sagan-gsa@sagan-5.iam.gserviceaccount.com
-
-gcloud container clusters update sagan-cluster \
-    --location=us-central1-a \
-    --workload-pool=sagan-5.svc.id.goog
-
-gcloud container node-pools create spot-frontend-pool \
-    --cluster sagan-cluster \
-    --spot \
-    --zone us-central1-a \
-    --machine-type e2-medium \
-    --node-taints dedicated=spot:NoSchedule \
-    --service-account=sagan-gsa@sagan-5.iam.gserviceaccount.com \
-    --num-nodes 1 \
-    --workload-metadata=GKE_METADATA
-
-gcloud container node-pools create spot-backend-pool \
-    --cluster sagan-cluster \
-    --spot \
-    --zone us-central1-a \
-    --machine-type e2-standard-2 \
-    --disk-size 40 \
-    --disk-type pd-balanced \
-    --node-taints dedicated=spot:NoSchedule \
-    --service-account=sagan-gsa@sagan-5.iam.gserviceaccount.com \
-    --num-nodes 1 \
-    --workload-metadata=GKE_METADATA
-
-gcloud container clusters update sagan-cluster \
-    --update-addons GcsFuseCsiDriver=ENABLED \
-    --location=us-central1-a 
-gcloud container clusters describe sagan-cluster \
-    --location us-central1-a \
-    --format="value(config.addonsConfig.gcsFuseCsiDriverConfig.enabled)"
-gcloud storage buckets create gs://sagan-bucket \
-    --location=us-central1 \
-    --uniform-bucket-level-access \
-    --enable-hierarchical-namespace
-gcloud storage buckets add-iam-policy-binding gs://sagan-bucket \
-    --member="serviceAccount:pytorch-bucket-sa@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
-    --role="roles/storage.objectUser"
-kubectl get daemonset gcs-fuse-csi-driver -n kube-system
-
-gcloud storage buckets update gs://sagan-bucket --lifecycle-file=lifecycle.json
-gcloud storage buckets describe gs://sagan-bucket --format="json(lifecycle)"
-kubectl label namespace sagan-app gke-gcsfuse-sidecar-injection=enabled
-
+#start the gateway
 kubectl apply -f gateway.yaml
 
-gateway api requires a secret in the certificateRefs section of gateway.yaml. 
-otherwise it throws the GWCER102 error.  creating a dummy secret 
-with the same name as your cert map satisfies the validator.  gke's 
-backend controller automatically swaps the dummy for the real sagan-cert-map.
+#gateway api requires a secret in the certificateRefs section of gateway.yaml. 
+#otherwise it throws the GWCER102 error.  creating a dummy secret 
+#with the same name as your cert map satisfies the validator.  gke's 
+#backend controller automatically swaps the dummy for the real sagan-cert-map.
 
 openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
   -keyout /tmp/tls.key -out /tmp/tls.crt \
@@ -209,10 +211,13 @@ gcloud compute firewall-rules create allow-gke-gw-frontend-hc \
     --source-ranges=130.211.0.0/22,35.191.0.0/16 \
     --rules=tcp:8501
 
-kubectl get gateway sagan-gateway -n sagan-app --watch # wait for gateway to be programmed
+#wait for gateway to be programmed
+kubectl get gateway sagan-gateway -n sagan-app --watch 
 kubectl describe gateway sagan-gateway -n sagan-app
 kubectl apply -f routes.yaml
-kubectl apply -f . --dry-run=server 
+kubectl apply -f . --dry-run=server
+#run it 
+kubectl apply -f . 
 
 gcloud compute networks subnets list --filter="purpose=REGIONAL_MANAGED_PROXY AND region:us-central1"
 gcloud compute networks list
@@ -222,11 +227,14 @@ kubectl get crds
 kubectl get services  
 kubectl get pods  
 kubectl get pods -n sagan-app -o wide -w
-gcloud container clusters list  
+gcloud container clusters list
+
+#check the negs (network endpoint groups)  
 kubectl get gateway external-http-gateway -o=jsonpath="{.status.addresses[0].value}" --watch # get gateway ip
-kubectl describe managedcertificate sagan-managed-cert 
+gcloud certificate-manager maps entries describe sagan-map-entry --map=sagan-cert-map
 kubectl get svc frontend-service -o jsonpath='{.metadata.annotations["cloud\.google\.com/neg-status"]}' # describe negs
 
+#restart/delete/idle
 kubectl rollout restart deployment sagan-deployment  
 gcloud container clusters delete sagan-cluster --zone us-central1-a  
 gcloud container clusters resize sagan-cluster --zone us-central1-a --node-pool spot-backend-pool --num-nodes 0
@@ -246,28 +254,17 @@ curl -sL https://istio.io/downloadIstioctl | sh -
 export PATH=$HOME/.istioctl/bin:$PATH 
 istioctl install --set profile=demo -y
 
-Stop and delete everything managed by Skaffold
+#clean up passed deployment
 skaffold delete
-
-Force delete any "stuck" jobs or pods
 kubectl delete jobs,pods --all -n sagan-app
-
-Ensure your terminal is still synced with Minikube's Docker
+#sync minikube and docker
 eval $(minikube docker-env)
+#start the local deployment
+skaffold dev -f local-skaffold.yaml --force=true --port-forward
 
-
-skaffold dev --force=true --port-forward
-
+#check the logs
 kubectl get pods -n sagan-app
-
-export BACKEND_POD=$(kubectl get pods -n sagan-app -l app=backend -o jsonpath='{.items[0].metadata.name}')
-echo $BACKEND_POD
-
-
 kubectl exec backend-deployment-5c76b9998d-4zhq2 -n sagan-app -- cat /app/data/train_job_20260409_164926.log
-
-
-
 kubectl exec backend-deployment-5c76b9998d-4zhq2 -n sagan-app -- ls /app/data/
 
 

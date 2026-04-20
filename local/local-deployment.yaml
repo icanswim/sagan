@@ -3,26 +3,14 @@ kind: Namespace
 metadata:
   name: sagan-app
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: sagan-pvc
-  namespace: sagan-app
-spec:
-  accessModes:
-    - ReadWriteMany
-  resources:
-    requests:
-      storage: 1Gi
----
-# Backend Service Account (Simplified for local)
+# Backend Service Account 
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: sagan-backend-ksa
   namespace: sagan-app
 ---
-# Backend Deployment (FastAPI)
+# Backend Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:

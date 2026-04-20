@@ -104,16 +104,22 @@ async def trigger_training():
                 backoff_limit=1,
                 ttl_seconds_after_finished=300, # Auto-cleanup in 5 mins
                 template=client.V1PodTemplateSpec(
+                    metadata=client.V1ObjectMeta(
+                        annotations={"gke-gcsfuse.google.com": "true"}
+                    ),
                     spec=client.V1PodSpec(
+                        service_account_name="sagan-backend-ksa",
                         restart_policy="Never",
-                        service_account_name="sagan-backend-ksa", 
+                        node_selector={"cloud.google.com": "spot-backend-pool"},
+                        tolerations=[client.V1Toleration(
+                            key="dedicated", operator="Equal", value="spot", effect="NoSchedule"
+                        )],
                         containers=[client.V1Container(
                             name="trainer",
-                            image="sagan-backend", 
+                            image="us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:v4", 
                             image_pull_policy="Never",   
                             command=["/app/.venv/bin/python", "-u", "train_job.py"],
-                            volume_mounts=[client.V1VolumeMount(name="data-storage", 
-                                                                mount_path="/app/data")],
+                            volume_mounts=[client.V1VolumeMount(name="fuse-volume", mount_path="/app/data")],
                             resources=client.V1ResourceRequirements(
                                 requests={"memory": "512Mi", "cpu": "500m"},
                                 limits={"memory": "4Gi", "cpu": "1000m"}

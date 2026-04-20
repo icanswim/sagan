@@ -3,7 +3,7 @@ kind: Namespace
 metadata:
   name: sagan-app
 ---
-# Backend Service Account
+# Backend Service Account (Workload Identity ready)
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -12,7 +12,7 @@ metadata:
   annotations:
     iam.gke.io/gcp-service-account: sagan-gsa@sagan-5.iam.gserviceaccount.com
 ---
-# RBAC: Permissions for the Backend to launch GKE Training Jobs
+# RBAC for GKE Training Jobs
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -23,8 +23,8 @@ rules:
   resources: ["jobs"]
   verbs: ["create", "get", "list", "delete"]
 - apiGroups: [""]
-  resources: ["serviceaccounts"]
-  verbs: ["get", "list"] # Required for the Job controller to verify the SA
+  resources: ["serviceaccounts", "pods"] 
+  verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -40,7 +40,7 @@ roleRef:
   name: job-manager-role
   apiGroup: rbac.authorization.k8s.io
 ---
-# Backend Deployment (FastAPI)
+# Backend Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -56,25 +56,21 @@ spec:
       labels:
         app: backend
       annotations:
-        gke-gcsfuse.google.com: "true"
+        gke-gcsfuse.google.com: "true" 
     spec:
       serviceAccountName: sagan-backend-ksa
       nodeSelector:
-        cloud.google.com: "spot-backend-pool"
+        ://cloud.google.com: "spot-backend-pool" # matches your node pool's label
       tolerations: 
       - key: "dedicated"
         operator: "Equal"
         value: "spot"
         effect: "NoSchedule"
-      securityContext:
-        fsGroup: 1000
-        runAsUser: 1000
-        runAsGroup: 1000 
       containers:
       - name: backend
-        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:v4
-        command: ["/opt/venv-backend/bin/uvicorn"]
-        args: ["main:app", "--host", "0.0.0.0", "--port", "8000"]
+        image: sagan-backend # Skaffold replaces this
+        command: ["/app/.venv/bin/python", "-m", "uvicorn", "main:app",
+          "--host", "0.0.0.0", "--port", "8000"]
         resources:
           requests:
             memory: "2Gi"
@@ -82,8 +78,6 @@ spec:
           limits:
             memory: "4Gi"
             cpu: "2000m"
-        ports:
-        - containerPort: 8000
         volumeMounts:
         - mountPath: "/app/data" 
           name: fuse-volume
@@ -107,16 +101,15 @@ spec:
   ports:
     - port: 8000
       targetPort: 8000
-  type: ClusterIP
 ---
-# Frontend Service Account
+# Frontend Service Account (no GCP permissions needed)
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: sagan-frontend-ksa
   namespace: sagan-app
 ---
-# Frontend Deployment (Streamlit)
+# Frontend Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -134,7 +127,7 @@ spec:
     spec:
       serviceAccountName: sagan-frontend-ksa
       nodeSelector:
-        cloud.google.com: "spot-frontend-pool"
+        ://cloud.google.com: "spot-frontend-pool"
       tolerations:
       - key: "dedicated"
         operator: "Equal"
@@ -142,20 +135,16 @@ spec:
         effect: "NoSchedule"
       containers:
       - name: frontend
-        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-frontend:v4
+        image: sagan-frontend # Skaffold replaces this
         workingDir: /app
-        command: ["/opt/venv-frontend/bin/streamlit"]
+        command: ["/app/.venv/bin/streamlit"]
         args: [
           "run", "main.py", 
           "--server.address", "0.0.0.0",
           "--server.port", "8501",
-          "--client.toolbarMode", "hidden",
-          "--server.enableCORS", "false",
-          "--server.enableXsrfProtection", "false",
           "--browser.serverAddress", "app.wylderhayes.com",
           "--browser.serverPort", "443"
         ]
-        # ADDED REQUESTS TO FIX VS CODE WARNING
         resources:
           requests:
             memory: "512Mi"
@@ -166,20 +155,18 @@ spec:
         env:
         - name: BACKEND_URL
           value: "http://backend-service:8000"
-        ports:
-        - containerPort: 8501
 ---
-# Frontend Service
+# Frontend Service (GKE External Load Balancer)
 apiVersion: v1
 kind: Service
 metadata:
   name: frontend-service
   namespace: sagan-app
 spec:
-  type: NodePort
+  type: LoadBalancer # Gives you a public IP in GKE
   selector:
     app: frontend
   ports:
-    - name: http-frontend
+    - name: http
       port: 80
       targetPort: 8501
