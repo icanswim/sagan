@@ -260,7 +260,7 @@ kubectl delete jobs,pods --all -n sagan-app
 #sync minikube and docker
 eval $(minikube docker-env)
 #start the local deployment
-skaffold dev -f local-skaffold.yaml --force=true --port-forward
+skaffold dev --force=true --port-forward
 
 #check the logs
 kubectl get pods -n sagan-app

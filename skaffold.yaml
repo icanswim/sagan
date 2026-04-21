@@ -3,28 +3,46 @@ kind: Config
 metadata:
   name: sagan
 build:
+  local:
+    useBuildkit: true
+    useDockerCLI: true
+    push: false
   artifacts:
-    - image: us-central1-docker.pkg.dev/[PROJECT_ID]/[REPO]/sagan-backend
+    - image: sagan-backend
       context: app/backend
-    - image: us-central1-docker.pkg.dev/[PROJECT_ID]/[REPO]/sagan-frontend
+    - image: sagan-frontend
       context: app/frontend
-  # For GKE, we want to push images to a registry
-  googleCloudBuild:
-    projectId: [PROJECT_ID]
 
 manifests:
   rawYaml:
     - istio-class.yaml
-    - deployment.yaml # Use the cleaned-up deployment below
+    - local/local-deployment.yaml
+    - local/local-gateway.yaml
+    - local/pvc.yaml
     - routes.yaml
-    - production-pvc.yaml # GKE storage classes differ from local
+    - local/k8s-rbac.yaml
 
-profiles:
-  - name: prod
-    activation:
-      - command: run
-    # Use different manifests for prod (e.g., higher replicas, cloud-specific LB)
-    patches:
-      - op: replace
-        path: /deploy/kubectl/manifests
-        value: ["k8s/prod/*.yaml"]
+portForward:
+  - resourceType: service
+    resourceName: frontend-service
+    namespace: sagan-app
+    port: 8501
+    localPort: 8501
+  - resourceType: service
+    resourceName: backend-service
+    namespace: sagan-app
+    port: 8000
+    localPort: 8000
+
+deploy:
+  kubectl:
+    hooks:
+      before:
+        - host:
+            # generate certs
+            command: ["sh", "-c", "openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout server.key -out server.crt -subj '/CN=app.wylderhayes.com' -addext 'subjectAltName=DNS:app.wylderhayes.com'"]
+        - host:
+            # combined namespace + secret creation
+            # create the namespace if missing, then create the secret
+            command: ["sh", "-c", "kubectl create namespace sagan-app --dry-run=client -o yaml | kubectl apply -f - && kubectl create secret tls sagan-local-cert --key server.key --cert server.crt --namespace sagan-app --dry-run=client -o yaml | kubectl apply -f -"]
+

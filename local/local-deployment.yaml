@@ -34,7 +34,7 @@ spec:
         env:
         - name: PYTHONUNBUFFERED
           value: "1"  
-        command: ["/app/.venv/bin/python", "-m", "uvicorn", "main:app",
+        command: ["/app/.venv/bin/python", "-m", "uvicorn", "local-main:app",
           "--host", "0.0.0.0", "--port", "8000"]
         resources:
           requests:
