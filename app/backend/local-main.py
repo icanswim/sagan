@@ -197,26 +197,26 @@ async def get_log():
 async def get_job_status():
     try:
         batch_v1 = client.BatchV1Api()
-        # list jobs in the namespace, sorted by creation timestamp
         jobs = batch_v1.list_namespaced_job(namespace="sagan-app")
         if not jobs.items:
-            return {"main.get_job_status": "No Jobs Found", "color": "gray"}
+            return {"status": "No Jobs Found", "color": "gray", "name": "N/A"}
 
         latest_job = sorted(jobs.items, key=lambda x: x.metadata.creation_timestamp)[-1]
         name = latest_job.metadata.name
         status = latest_job.status
 
+        # Standardize the key to "status"
         if status.active:
-            return {"main.get_job_status": "Running 🏃", "color": "blue", "name": name}
+            return {"status": "Running 🏃", "color": "blue", "name": name}
         if status.succeeded:
-            return {"main.get_job_status": "Succeeded ✅", "color": "green", "name": name}
+            return {"status": "Succeeded ✅", "color": "green", "name": name}
         if status.failed:
-            return {"main.get_job_status": "Failed ❌", "color": "red", "name": name}
+            return {"status": "Failed ❌", "color": "red", "name": name}
             
-        return {"main.get_job_status": "Pending ⏳", "color": "orange", "name": name}
+        return {"status": "Pending ⏳", "color": "orange", "name": name}
     except Exception as e:
-        return {"main.get_job_status": f"Error: {str(e)}", "color": "red"}
-    
+        return {"status": f"Error: {str(e)}", "color": "red", "name": "Error"}
+
 @app.delete("/stop_train")
 async def stop_training():
     try:

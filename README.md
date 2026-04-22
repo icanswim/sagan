@@ -278,7 +278,8 @@ gcloud container clusters resize sagan-cluster --zone ${ZONE} --node-pool spot-f
 
 # local skaffold dev minikube
 minikube start --cpus 4 --memory 8192
-eval $(minikube docker-env)
+eval $(minikube docker-env) # set
+eval $(minikube docker-env -u) # un-set
 #minikube uses latest tag for instant reloading of image after saving updates
 docker build -t sagan-frontend:latest ./app/frontend
 docker build -t sagan-backend:latest ./app/backend

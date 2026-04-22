@@ -39,7 +39,7 @@ deploy:
     hooks:
       before:
         - host:
-            command: ["sh", "-c", "openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout server.key -out server.crt -subj '/CN=://wylderhayes.com' -addext 'subjectAltName=DNS:://wylderhayes.com'"]
+            command: ["sh", "-c", "openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout server.key -out server.crt -subj '/CN=wylderhayes.com' -addext 'subjectAltName=DNS:wylderhayes.com'"]
         - host:
             command: ["sh", "-c", "kubectl create namespace sagan-app --dry-run=client -o yaml | kubectl apply -f - && kubectl create secret tls sagan-local-cert --key server.key --cert server.crt --namespace sagan-app --dry-run=client -o yaml | kubectl apply -f -"]
 
