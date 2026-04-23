@@ -56,11 +56,12 @@ spec:
       labels:
         app: backend
       annotations:
-        gke-gcsfuse.google.com: "true" 
+        gke-gcsfuse/volumes: "true"
     spec:
       serviceAccountName: sagan-backend-ksa
       nodeSelector:
-        ://cloud.google.com: "spot-backend-pool" # matches your node pool's label
+        cloud.google.com/gke-nodepool: "spot-backend-pool"
+        iam.gke.io/gke-metadata-server-enabled: "true"
       tolerations: 
       - key: "dedicated"
         operator: "Equal"
@@ -68,7 +69,7 @@ spec:
         effect: "NoSchedule"
       containers:
       - name: backend
-        image: sagan-backend # Skaffold replaces this
+        image: sagan-backend # skaffold replaces this
         command: ["/app/.venv/bin/python", "-m", "uvicorn", "main:app",
           "--host", "0.0.0.0", "--port", "8000"]
         resources:
@@ -127,7 +128,8 @@ spec:
     spec:
       serviceAccountName: sagan-frontend-ksa
       nodeSelector:
-        ://cloud.google.com: "spot-frontend-pool"
+        cloud.google.com/gke-nodepool: "spot-frontend-pool"
+        iam.gke.io/gke-metadata-server-enabled: "true"
       tolerations:
       - key: "dedicated"
         operator: "Equal"
@@ -135,13 +137,15 @@ spec:
         effect: "NoSchedule"
       containers:
       - name: frontend
-        image: sagan-frontend # Skaffold replaces this
+        image: sagan-frontend # skaffold replaces this
         workingDir: /app
         command: ["/app/.venv/bin/streamlit"]
         args: [
           "run", "main.py", 
           "--server.address", "0.0.0.0",
           "--server.port", "8501",
+          "--server.enableCORS", "false",          
+          "--server.enableXsrfProtection", "false",
           "--browser.serverAddress", "app.wylderhayes.com",
           "--browser.serverPort", "443"
         ]
@@ -155,6 +159,8 @@ spec:
         env:
         - name: BACKEND_URL
           value: "http://backend-service:8000"
+        - name: PYTHONUNBUFFERED
+          value: "1"
 ---
 # Frontend Service (GKE External Load Balancer)
 apiVersion: v1

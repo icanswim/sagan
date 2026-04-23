@@ -21,7 +21,7 @@ st.caption("A utility for serving data science applications.")
 t1, t2 = st.tabs(["💬 Inference", "🛠️ Training Control"])
 
 with t1:
-    prompt = st.text_area("Ask Shakespeare...", placeholder="To be or not to be?", height=150)
+    prompt = st.text_area("Ask Shakespeare...", placeholder="To be or not to be...", height=150)
     if st.button("Generate", type="primary"):
         with st.spinner("Thinking..."):
             try:

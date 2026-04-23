@@ -15,6 +15,7 @@ build:
 
 manifests:
   rawYaml:
+    - k8s/namespace.yaml
     - k8s/istio-class.yaml
     - local/local-deployment.yaml
     - local/local-gateway.yaml
@@ -41,17 +42,20 @@ deploy:
         - host:
             command: ["sh", "-c", "openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout server.key -out server.crt -subj '/CN=wylderhayes.com' -addext 'subjectAltName=DNS:wylderhayes.com'"]
         - host:
-            command: ["sh", "-c", "kubectl create namespace sagan-app --dry-run=client -o yaml | kubectl apply -f - && kubectl create secret tls sagan-local-cert --key server.key --cert server.crt --namespace sagan-app --dry-run=client -o yaml | kubectl apply -f -"]
+            command: ["sh", "-c", "kubectl create secret tls sagan-local-cert --key server.key --cert server.crt --namespace sagan-app --dry-run=client -o yaml | kubectl apply -f -"]
 
 profiles:
   - name: gke
     build:
-      googleCloudBuild: {}  # Faster for GKE; builds in the cloud
+      googleCloudBuild:
+        projectId: "${PROJECT_ID}"
+        bucket: "${BUCKET_NAME}" # envsubst < skaffold.yaml | skaffold run -p gke -f -
       artifacts:
         - image: sagan-backend
           context: app/backend
         - image: sagan-frontend
           context: app/frontend
+
     manifests:
       rawYaml:
         - k8s/namespace.yaml

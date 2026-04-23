@@ -1,7 +1,9 @@
 # sagan
+
 A utility for serving containerized data science applications. 
 
 # stack
+
 skaffold for local dev
 minikube for local dev
 gke
@@ -14,25 +16,31 @@ streamlit
 
 ## workflow
 
-project_id="sagan-5"
-region="us-central1"
-zone_letter="a"
-image_repo_name="sagan-image-repo"
+#environment
 
-gcloud auth login  
-gcloud projects create "$project_id"
-gcloud config set project "$project_id"
+gcloud auth login
 gcloud components install skaffold
 
-export REGION="$region"
-export ZONE="${REGION}-${zone_letter}"  # Results in us-central1-a
-export PROJECT_ID=$(gcloud config get-value project)  
-export IMAGE_REPO_NAME="$image_repo_name"
+#create setup.sh
+    #load the private values from .env
+    export $(grep -v '^#' .env | xargs)
 
-export SKAFFOLD_DEFAULT_REPO="${REGION}-docker.pkg.dev/${PROJECT_ID}/${IMAGE_REPO_NAME}"
-export IMAGE_TAG="v4"
-export FRONT_IMAGE_URI="${SKAFFOLD_DEFAULT_REPO}/sagan-frontend:${IMAGE_TAG}"  
-export BACK_IMAGE_URI="${SKAFFOLD_DEFAULT_REPO}/sagan-backend:${IMAGE_TAG}"
+    #create some new variables based on the loaded values
+    export ZONE="${REGION}-${ZONE_LETTER}"
+    export CLUSTER="${CLUSTER_NAME}"
+    export SAGAN_IMAGE_REPO="${REGION}-docker.pkg.dev/${PROJECT_ID}/${IMAGE_REPO_NAME}"
+    export FRONT_IMAGE_URI="${SAGAN_IMAGE_REPO}/sagan-frontend"
+    export BACK_IMAGE_URI="${SAGAN_IMAGE_REPO}/sagan-backend"
+
+    #apply settings
+    gcloud container clusters get-credentials ${CLUSTER} --zone ${ZONE} --project ${PROJECT_ID}
+    skaffold config set default-repo ${SAGAN_IMAGE_REPO}
+    kubectl config current-context
+
+source setup.sh
+  
+gcloud projects create "$PROJECT_ID"
+gcloud config set project "$PROJECT_ID"
 
 gcloud services enable compute.googleapis.com
 gcloud compute addresses create sagan-ingress-ip --global  
@@ -41,6 +49,7 @@ gcloud compute addresses describe sagan-ingress-ip --global --format="get(addres
 
 gcloud services enable artifactregistry.googleapis.com  
 gcloud artifacts repositories create ${IMAGE_REPO_NAME} --repository-format=docker --location=${REGION} --description="sagan-app"  
+
 #set IMAGE_URIs in deployment.yaml
 
 #enable docker to work with gcloud
@@ -73,7 +82,7 @@ gcloud certificate-manager certificates list
 
 gcloud services enable container.googleapis.com  
 
-gcloud container clusters create sagan-cluster \
+gcloud container clusters create ${CLUSTER} \
     --workload-pool=${PROJECT_ID}.svc.id.goog \
     --addons=GcsFuseCsiDriver \
     --gateway-api=standard \
@@ -81,7 +90,7 @@ gcloud container clusters create sagan-cluster \
     --machine-type e2-medium \
     --num-nodes=1  
 
-gcloud container clusters get-credentials sagan-cluster --zone ${ZONE} 
+gcloud container clusters get-credentials ${CLUSTER} --zone ${ZONE} 
 
 kubectl create namespace sagan-app --save-config
 
@@ -100,11 +109,33 @@ gcloud projects add-iam-policy-binding ${PROJECT_ID} \
     --member="serviceAccount:sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com" \
     --role="roles/artifactregistry.reader"
 
+export PROJECT_NUMBER=$(gcloud projects describe ${PROJECT_ID} --format="value(projectNumber)")
+gcloud storage buckets add-iam-policy-binding gs://${BUCKET_NAME} \
+    --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
+    --role="roles/storage.admin"
+
+gcloud storage buckets add-iam-policy-binding gs://${BUCKET_NAME} \
+    --member="serviceAccount:sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --role="roles/storage.objectUser"
+
 kubectl create serviceaccount sagan-backend-ksa -n sagan-app
 
 gcloud iam service-accounts add-iam-policy-binding sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com \
     --role="roles/iam.workloadIdentityUser" \
     --member="serviceAccount:${PROJECT_ID}.svc.id.goog[sagan-app/sagan-backend-ksa]"
+
+#bucket creation
+
+gcloud storage buckets create gs://${BUCKET_NAME} \
+    --location=${REGION} \
+    --uniform-bucket-level-access \
+    --enable-hierarchical-namespace
+
+kubectl get daemonset gcs-fuse-csi-driver -n kube-system
+#create lifecycle.json for bucket maintainence
+gcloud storage buckets update gs://${BUCKET_NAME} --lifecycle-file=lifecycle.json
+gcloud storage buckets describe gs://${BUCKET_NAME} --format="json(lifecycle)"
+kubectl label namespace sagan-app gke-gcsfuse-sidecar-injection=enabled
 
 kubectl annotate serviceaccount sagan-backend-ksa \
     --namespace sagan-app \
@@ -121,7 +152,7 @@ kubectl annotate serviceaccount sagan-frontend-ksa \
     iam.gke.io/gcp-service-account=sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com
 
 gcloud container node-pools create spot-frontend-pool \
-    --cluster sagan-cluster \
+    --cluster ${CLUSTER} \
     --spot \
     --zone us-central1-a \
     --machine-type e2-medium \
@@ -131,7 +162,7 @@ gcloud container node-pools create spot-frontend-pool \
     --workload-metadata=GKE_METADATA
 
 gcloud container node-pools create spot-backend-pool \
-    --cluster sagan-cluster \
+    --cluster ${CLUSTER} \
     --spot \
     --zone us-central1-a \
     --machine-type e2-standard-2 \
@@ -142,21 +173,9 @@ gcloud container node-pools create spot-backend-pool \
     --num-nodes 1 \
     --workload-metadata=GKE_METADATA
 
-gcloud container clusters describe sagan-cluster \
+gcloud container clusters describe ${CLUSTER} \
     --location ${ZONE} \
     --format="value(config.addonsConfig.gcsFuseCsiDriverConfig.enabled)"
-gcloud storage buckets create gs://sagan-bucket \
-    --location=${REGION} \
-    --uniform-bucket-level-access \
-    --enable-hierarchical-namespace
-gcloud storage buckets add-iam-policy-binding gs://sagan-bucket \
-    --member="serviceAccount:sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com" \
-    --role="roles/storage.objectUser"
-kubectl get daemonset gcs-fuse-csi-driver -n kube-system
-
-gcloud storage buckets update gs://sagan-bucket --lifecycle-file=lifecycle.json
-gcloud storage buckets describe gs://sagan-bucket --format="json(lifecycle)"
-kubectl label namespace sagan-app gke-gcsfuse-sidecar-injection=enabled
 
 #assemble repo  
 
@@ -191,6 +210,7 @@ uv add fastapi
 #create Dockerfile backend
 
 #start the gateway
+
 gcloud compute networks subnets create sagan-proxy-subnet \
     --purpose=REGIONAL_MANAGED_PROXY \
     --role=ACTIVE \
@@ -229,34 +249,21 @@ kubectl describe gateway sagan-gateway -n sagan-app
 kubectl apply -f . --dry-run=server
 
 #run it 
-skaffold run -p gke
+#pipe BUCKET_NAME and any other variables from skaffold.yaml to skaffold run (since skaffold.yaml cant transmit bucket to googleCloudBuild)
+envsubst < skaffold.yaml | skaffold run -p gke -f -
 
 #check the negs (network endpoint groups)  
 kubectl get gateway external-http-gateway -o=jsonpath="{.status.addresses[0].value}" --watch # get gateway ip
 gcloud certificate-manager maps entries describe sagan-map-entry --map=sagan-cert-map
 kubectl get svc frontend-service -o jsonpath='{.metadata.annotations["cloud\.google\.com/neg-status"]}' # describe negs
 
-#running
-project_id="sagan-5"
-region="us-central1"
-zone_letter="a"
-image_repo_name="sagan-image-repo"
+# running
 
-gcloud config set project "$project_id"
+#environment
+source setup.sh
 
-export REGION="$region"
-export ZONE="${REGION}-${zone_letter}"  # Results in us-central1-a
-export PROJECT_ID=$(gcloud config get-value project)  
-export IMAGE_REPO_NAME="$image_repo_name"
-
-export SKAFFOLD_DEFAULT_REPO="${REGION}-docker.pkg.dev/${PROJECT_ID}/${IMAGE_REPO_NAME}"
-export IMAGE_TAG="v4"
-export FRONT_IMAGE_URI="${SKAFFOLD_DEFAULT_REPO}/sagan-frontend:${IMAGE_TAG}"  
-export BACK_IMAGE_URI="${SKAFFOLD_DEFAULT_REPO}/sagan-backend:${IMAGE_TAG}"
-
-gcloud container clusters get-credentials sagan-cluster --region ${ZONE} --project ${PROJECT_ID}
-kubectl create namespace sagan-app
-skaffold run -p gke --default-repo=${REGION}-docker.pkg.dev/${PROJECT_ID}/${IMAGE_REPO_NAME}
+#pipe BUCKET_NAME and any other variables from skaffold.yaml to skaffold run (since skaffold.yaml cant transmit bucket to googleCloudBuild)
+envsubst < skaffold.yaml | skaffold run -p gke -f -
 
 gcloud compute networks subnets list --filter="purpose=REGIONAL_MANAGED_PROXY AND region:us-central1"
 gcloud compute networks list
@@ -267,34 +274,35 @@ kubectl get services
 kubectl get pods  
 kubectl get pods -n sagan-app -o wide -w
 gcloud container clusters list
+kubectl exec -it $(kubectl get pod -l app=backend -n sagan-app -o name) -n sagan-app -- ls /app/data
+
 
 #restart/delete/idle
-kubectl rollout restart deployment sagan-deployment 
+
+kubectl rollout restart deployment backend-deployment 
 skaffold delete -p gke  # removes K8s resources
-gcloud container clusters delete sagan-cluster --zone ${ZONE}  
-gcloud container clusters resize sagan-cluster --zone ${ZONE} --node-pool spot-backend-pool --num-nodes 0
-gcloud container clusters resize sagan-cluster --zone ${ZONE} --node-pool spot-frontend-pool --num-nodes 0
+gcloud container clusters delete ${CLUSTER} --zone ${ZONE}  
+gcloud container clusters resize ${CLUSTER} --zone ${ZONE} --node-pool spot-backend-pool --num-nodes 1
+gcloud container clusters resize ${CLUSTER} --zone ${ZONE} --node-pool spot-frontend-pool --num-nodes 1
 
 
 # local skaffold dev minikube
+
 minikube start --cpus 4 --memory 8192
 eval $(minikube docker-env) # set
-eval $(minikube docker-env -u) # un-set
-#minikube uses latest tag for instant reloading of image after saving updates
-docker build -t sagan-frontend:latest ./app/frontend
-docker build -t sagan-backend:latest ./app/backend
+docker build -t sagan-frontend ./app/frontend
+docker build -t sagan-backend ./app/backend
 minikube image ls
 
-kubectl config use-context minikube
-kubectl config current-context
-
+#one time install
 curl -sL https://istio.io/downloadIstioctl | sh -
 export PATH=$HOME/.istioctl/bin:$PATH 
 istioctl install --set profile=demo -y
 
 #clean up past deployment
-skaffold delete
+
 kubectl config use-context minikube
+skaffold delete
 kubectl delete jobs,pods --all -n sagan-app
 #sync minikube and docker
 eval $(minikube docker-env)

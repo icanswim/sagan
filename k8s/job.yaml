@@ -5,11 +5,11 @@ metadata:
   namespace: sagan-app
 spec:
   backoffLimit: 2 
-  ttlSecondsAfterFinished: 300 
+  ttlSecondsAfterFinished: 200 
   template:
     metadata:
       annotations:
-        gke-gcsfuse.google.com: "true"
+        gke-gcsfuse/volumes: "true"
     spec:
       serviceAccountName: sagan-backend-ksa
       restartPolicy: OnFailure
@@ -26,7 +26,7 @@ spec:
         runAsGroup: 1000
       containers:
       - name: trainer
-        image: us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:v4
+        image: sagan-backend
         command: ["/app/.venv/bin/python"]
         args: ["train_job.py"] 
         resources:

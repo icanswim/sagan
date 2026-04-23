@@ -16,7 +16,7 @@ spec:
         runAsGroup: 1000
       containers:
       - name: trainer
-        image: sagan-backend:latest
+        image: sagan-backend # skaffold replaces this
         imagePullPolicy: IfNotPresent
         command: ["/app/.venv/bin/python"]
         args: ["train_job.py"] 

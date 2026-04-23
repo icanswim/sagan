@@ -102,10 +102,10 @@ async def trigger_training():
             metadata=client.V1ObjectMeta(name=job_name),
             spec=client.V1JobSpec(
                 backoff_limit=1,
-                ttl_seconds_after_finished=300, # Auto-cleanup in 5 mins
+                ttl_seconds_after_finished=200, 
                 template=client.V1PodTemplateSpec(
                     metadata=client.V1ObjectMeta(
-                        annotations={"gke-gcsfuse.google.com": "true"}
+                        annotations={"gke-gcsfuse/volumes": "true"}
                     ),
                     spec=client.V1PodSpec(
                         service_account_name="sagan-backend-ksa",
@@ -117,7 +117,7 @@ async def trigger_training():
                         containers=[client.V1Container(
                             name="trainer",
                             image="us-central1-docker.pkg.dev/sagan-5/sagan-image-repo/sagan-backend:v4", 
-                            image_pull_policy="Never",   
+                            image_pull_policy="IfNotPresent",   
                             command=["/app/.venv/bin/python", "-u", "train_job.py"],
                             volume_mounts=[client.V1VolumeMount(name="fuse-volume", mount_path="/app/data")],
                             resources=client.V1ResourceRequirements(
@@ -126,9 +126,13 @@ async def trigger_training():
                             )
                         )],
                         volumes=[client.V1Volume(
-                            name="data-storage",
-                            persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
-                                claim_name="sagan-pvc" 
+                            name="fuse-volume", # Must match the volume_mounts name
+                            csi=client.V1CSIVolumeSource(
+                                driver="gcsfuse.csi.storage.gke.io",
+                                volume_attributes={
+                                    "bucketName": "sagan-bucket",
+                                    "mountOptions": "uid=1000,gid=1000,file-mode=775,dir-mode=775"
+                                }
                             )
                         )]
                     )
