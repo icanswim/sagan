@@ -1,7 +1,7 @@
 [submodule "gpt"]
-	path = gpt
+	path = app/backend/gpt
 	url = https://github.com/icanswim/gpt.git
 [submodule "cosmosis"]
-	path = cosmosis
+	path = app/backend/cosmosis
 	url = https://github.com/icanswim/cosmosis.git
 	branch = cloud
