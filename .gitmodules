@@ -1,3 +1,6 @@
 [submodule "gpt"]
 	path = gpt
 	url = https://github.com/icanswim/gpt.git
+[submodule "cosmosis"]
+	path = cosmosis
+	url = https://github.com/icanswim/cosmosis.git
