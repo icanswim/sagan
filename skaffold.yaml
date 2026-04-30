@@ -63,5 +63,5 @@ profiles:
         - k8s/deployment.yaml
         - k8s/gateway.yaml
         - k8s/routes.yaml
-        - k8s/job.yaml
+        #- k8s/job.yaml
         - k8s/gcp-backend-policy.yaml

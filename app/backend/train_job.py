@@ -12,10 +12,10 @@ from gpt.dataset import TinyShakes
 from cosmosis.learning import Learn, Metric, Selector
 from cosmosis.model import GPT
 
-logger = Metric.setup_logging(log_name='train_job', log_dir='./data')
+logger = Metric.setup_logging(log_name='backend.train-job', log_dir='/app/data')
 
 def run_training():
-    dir = "./data"
+    dir = "/app/data"
     
     d_seq = 25       # dimension sequence length
     d_gen = 25       # dimension generate number of tokens in inference
@@ -48,7 +48,7 @@ def run_training():
                 'y': [AsTensor(long)],
                 'position': [AsTensor(long)]
             },
-            'n': 500,
+            'n': 5000,
             'd_seq': d_seq,
             'dir': dir,
             'prompt': False,
@@ -73,19 +73,17 @@ def run_training():
         model_param=model_param, ds_param=ds_param, metric_param=metric_param,
         opt_param=opt_param, crit_param=crit_param, sample_param=sample_param, 
         sched_param=sched_param,
-        dir=dir, batch_size=32, epoch=3, gpu=False,
+        dir=dir, batch_size=128, epoch=3, gpu=False,
         save_model='tinyshakes384', load_model='tinyshakes384'
     )
     
     try:
         out = learner.run_experiment()
-        logger.info("train_job complete... {}".format(out))
+        logger.info("train-job complete... {}".format(out))
     except Exception as e:
         full_trace = traceback.format_exc()
-        logger.error(f"main.handle_text failed: {e}\n{full_trace}")
-        raise HTTPException(
-                    status_code=500, 
-                    detail={"message": str(e), "traceback": full_trace})
+        logger.error(f"backend.train-job failed: {e}\n{full_trace}")
+        raise RuntimeError(f"Training failed: {e}") 
 
 if __name__ == "__main__":
     run_training()

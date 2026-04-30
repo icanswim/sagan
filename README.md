@@ -262,7 +262,7 @@ kubectl get svc frontend-service -o jsonpath='{.metadata.annotations["cloud\.goo
 #environment
 source setup.sh
 
-#pipe BUCKET_NAME and any other variables from skaffold.yaml to skaffold run (since skaffold.yaml cant transmit bucket to googleCloudBuild)
+#pipe BUCKET_NAME and any other variables from skaffold.yaml to skaffold run (since skaffold.yaml can not transmit variables to googleCloudBuild)
 envsubst < skaffold.yaml | skaffold run -p gke -f -
 
 gcloud compute networks subnets list --filter="purpose=REGIONAL_MANAGED_PROXY AND region:us-central1"
@@ -281,6 +281,7 @@ kubectl exec -it $(kubectl get pod -l app=backend -n sagan-app -o name) -n sagan
 
 kubectl rollout restart deployment backend-deployment 
 skaffold delete -p gke  # removes K8s resources
+kubectl delete jobs,pods --all -n sagan-app
 gcloud container clusters delete ${CLUSTER} --zone ${ZONE}  
 gcloud container clusters resize ${CLUSTER} --zone ${ZONE} --node-pool spot-backend-pool --num-nodes 1
 gcloud container clusters resize ${CLUSTER} --zone ${ZONE} --node-pool spot-frontend-pool --num-nodes 1
@@ -311,7 +312,11 @@ skaffold dev --force=true --port-forward
 
 #check the logs
 kubectl get pods -n sagan-app
-kubectl exec backend-deployment-5c76b9998d-4zhq2 -n sagan-app -- cat /app/data/train_job_20260409_164926.log
-kubectl exec backend-deployment-5c76b9998d-4zhq2 -n sagan-app -- ls /app/data/
+kubectl exec backend-deployment-75f877f758-5qc77 -n sagan-app -- ls /app/data/
+kubectl exec backend-deployment-587847cb67-mpsws -n sagan-app -- cat /app/data/log-f371e3b0-8ff8-464b-b765-d5a0683e7a4e.txt
+
+kubectl exec backend-deployment-7c8c4b598c-5qpg7 -n sagan-app -- sh -c 'rm /app/data/*txt'
+
+kubectl exec backend-deployment-75f877f758-5qc77 -n sagan-app -- ls -lh /app/data/tinyshakes.txt
 
 
