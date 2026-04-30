@@ -1,0 +1,191 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sagan-app
+---
+# Backend Service Account (Workload Identity ready)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sagan-backend-ksa
+  namespace: sagan-app
+  annotations:
+    iam.gke.io/gcp-service-account: sagan-gsa@sagan-5.iam.gserviceaccount.com
+---
+# RBAC for GKE Training Jobs
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: sagan-app
+  name: job-manager-role
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["create", "get", "list", "delete"]
+- apiGroups: [""]
+  resources: ["serviceaccounts", "pods", "pods/log"] 
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backend-job-manager-binding
+  namespace: sagan-app
+subjects:
+- kind: ServiceAccount
+  name: sagan-backend-ksa
+  namespace: sagan-app
+roleRef:
+  kind: Role
+  name: job-manager-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# Backend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-deployment
+  namespace: sagan-app
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+      annotations:
+        gke-gcsfuse/volumes: "true"
+    spec:
+      serviceAccountName: sagan-backend-ksa
+      nodeSelector:
+        cloud.google.com/gke-nodepool: "spot-backend-pool"
+        iam.gke.io/gke-metadata-server-enabled: "true"
+      tolerations: 
+      - key: "dedicated"
+        operator: "Equal"
+        value: "spot"
+        effect: "NoSchedule"
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000   
+      containers:
+      - name: backend
+        image: sagan-backend # skaffold replaces this
+        env:
+        - name: SKAFFOLD_IMAGE_SAGAN_BACKEND # default env var injected by skaffold
+          value: sagan-backend # skaffold replaces this
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        command: ["/app/.venv/bin/python", "-m", "uvicorn", "main:app",
+          "--host", "0.0.0.0", "--port", "8000"]
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "250m"
+          limits:
+            memory: "4Gi"
+            cpu: "1000m"
+        volumeMounts:
+        - mountPath: "/app/data" 
+          name: fuse-volume
+      volumes:
+      - name: fuse-volume
+        csi:
+          driver: gcsfuse.csi.storage.gke.io
+          volumeAttributes:
+            bucketName: sagan-bucket
+            mountOptions: "uid=1000,gid=1000,file-mode=775,dir-mode=775"
+---
+# Backend Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: sagan-app
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+# Frontend Service Account (no GCP permissions needed)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sagan-frontend-ksa
+  namespace: sagan-app
+---
+# Frontend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend-deployment
+  namespace: sagan-app
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      serviceAccountName: sagan-frontend-ksa
+      nodeSelector:
+        cloud.google.com/gke-nodepool: "spot-frontend-pool"
+        iam.gke.io/gke-metadata-server-enabled: "true"
+      tolerations:
+      - key: "dedicated"
+        operator: "Equal"
+        value: "spot"
+        effect: "NoSchedule"
+      containers:
+      - name: frontend
+        image: sagan-frontend # skaffold replaces this
+        workingDir: /app
+        command: ["/app/.venv/bin/streamlit"]
+        args: [
+          "run", "main.py", 
+          "--server.address", "0.0.0.0",
+          "--server.port", "8501",
+          "--server.enableCORS", "false",          
+          "--server.enableXsrfProtection", "false",
+          "--browser.serverAddress", "app.wylderhayes.com",
+          "--browser.serverPort", "443"
+        ]
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        env:
+        - name: BACKEND_URL
+          value: "http://backend-service:8000"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+---
+# Frontend Service (GKE External Load Balancer)
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: sagan-app
+spec:
+  type: LoadBalancer # Gives you a public IP in GKE
+  selector:
+    app: frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8501

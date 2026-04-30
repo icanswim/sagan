@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sagan-training-job
+  namespace: sagan-app
+spec:
+  backoffLimit: 2 
+  ttlSecondsAfterFinished: 200 
+  template:
+    metadata:
+      annotations:
+        gke-gcsfuse/volumes: "true"
+    spec:
+      serviceAccountName: sagan-backend-ksa
+      restartPolicy: OnFailure
+      nodeSelector:
+        cloud.google.com/gke-nodepool: "spot-backend-pool"
+      tolerations: 
+      - key: "dedicated"
+        operator: "Equal"
+        value: "spot"
+        effect: "NoSchedule"
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+      - name: trainer
+        image: sagan-backend
+        command: ["/app/.venv/bin/python"]
+        args: ["train_job.py"] 
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "2000m"
+          limits:
+            memory: "8Gi"
+            cpu: "4000m"
+        volumeMounts:
+        - mountPath: "/app/data"
+          name: fuse-volume
+      volumes:
+      - name: fuse-volume
+        csi:
+          driver: gcsfuse.csi.storage.gke.io
+          volumeAttributes:
+            bucketName: sagan-bucket
+            mountOptions: "uid=1000,gid=1000,file-mode=775,dir-mode=775"

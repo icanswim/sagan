@@ -5,8 +5,7 @@ metadata:
   namespace: sagan-app
 spec:
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
   resources:
     requests:
-      storage: 10Gi
-  storageClassName: standard-rwo
+      storage: 1Gi

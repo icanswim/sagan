@@ -1,0 +1,67 @@
+apiVersion: skaffold/v4beta13
+kind: Config
+metadata:
+  name: sagan
+build:
+  local:
+    useBuildkit: true
+    useDockerCLI: true
+    push: false
+  artifacts:
+    - image: sagan-backend
+      context: app/backend
+    - image: sagan-frontend
+      context: app/frontend
+
+manifests:
+  rawYaml:
+    - k8s/namespace.yaml
+    - k8s/istio-class.yaml
+    - local/local-deployment.yaml
+    - local/local-gateway.yaml
+    - local/pvc.yaml
+    - k8s/routes.yaml
+    - local/k8s-rbac.yaml
+
+portForward:
+  - resourceType: service
+    resourceName: frontend-service
+    namespace: sagan-app
+    port: 8501
+    localPort: 8501
+  - resourceType: service
+    resourceName: backend-service
+    namespace: sagan-app
+    port: 8000
+    localPort: 8000
+
+deploy:
+  kubectl:
+    hooks:
+      before:
+        - host:
+            command: ["sh", "-c", "openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout server.key -out server.crt -subj '/CN=wylderhayes.com' -addext 'subjectAltName=DNS:wylderhayes.com'"]
+        - host:
+            command: ["sh", "-c", "kubectl create secret tls sagan-local-cert --key server.key --cert server.crt --namespace sagan-app --dry-run=client -o yaml | kubectl apply -f -"]
+
+profiles:
+  - name: gke
+    build:
+      googleCloudBuild:
+        projectId: "${PROJECT_ID}"
+        bucket: "${BUCKET_NAME}" # envsubst < skaffold.yaml | skaffold run -p gke -f -
+      artifacts:
+        - image: sagan-backend
+          context: app/backend
+        - image: sagan-frontend
+          context: app/frontend
+
+    manifests:
+      rawYaml:
+        - k8s/namespace.yaml
+        - k8s/istio-class.yaml
+        - k8s/deployment.yaml
+        - k8s/gateway.yaml
+        - k8s/routes.yaml
+        #- k8s/job.yaml
+        - k8s/gcp-backend-policy.yaml

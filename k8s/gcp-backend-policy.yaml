@@ -1,0 +1,30 @@
+# Policy for the Frontend (Streamlit)
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: sagan-frontend-policy
+  namespace: sagan-app
+spec:
+  default:
+    timeoutSec: 3600 # Essential for Streamlit websockets
+    sessionAffinity:
+      type: GENERATED_COOKIE
+      cookieTtlSec: 3600
+  targetRef:
+    group: ""
+    kind: Service
+    name: frontend-service
+---
+# Policy for the Backend API
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: sagan-backend-policy
+  namespace: sagan-app
+spec:
+  default:
+    timeoutSec: 3600 # Prevents streaming logs from timing out
+  targetRef:
+    group: ""
+    kind: Service
+    name: backend-service

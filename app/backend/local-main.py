@@ -30,23 +30,6 @@ def load_k8s_config():
     except config.ConfigException:
         config.load_kube_config()
 
-def get_current_image():
-    # try and get env var image:tag from skaffold
-    env_image = os.getenv("SKAFFOLD_IMAGE_SAGAN_BACKEND")
-    if env_image and env_image != "sagan-backend":
-        return env_image
-    # use kubernetes api to get image name and current tag
-    try:
-        config.load_incluster_config()
-        v1 = client.CoreV1Api()
-        pod_name = os.getenv("HOSTNAME") 
-        pod = v1.read_namespaced_pod(name=pod_name, namespace="sagan-app")
-        # grab the image from the first container
-        return pod.spec.containers[0].image
-    except Exception as e:
-        logger.warning(f"could not fetch image name from api: {e}")
-        return "sagan-backend:latest"
-    
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
@@ -109,8 +92,6 @@ app = FastAPI(lifespan=lifespan)
 
 @app.post("/train")
 async def trigger_training():
-
-    skaffold_image_sagan_backend = get_current_image()
     try:
         batch_v1 = client.BatchV1Api()
         job_name = f"sagan-train-{uuid.uuid4().hex[:6]}"
@@ -121,38 +102,27 @@ async def trigger_training():
             metadata=client.V1ObjectMeta(name=job_name),
             spec=client.V1JobSpec(
                 backoff_limit=1,
-                ttl_seconds_after_finished=200, 
+                ttl_seconds_after_finished=300, # Auto-cleanup in 5 mins
                 template=client.V1PodTemplateSpec(
-                    metadata=client.V1ObjectMeta(
-                        labels={"job-group": "sagan-train"},
-                        annotations={"gke-gcsfuse/volumes": "true"}
-                    ),
                     spec=client.V1PodSpec(
-                        service_account_name="sagan-backend-ksa",
                         restart_policy="Never",
-                        node_selector={"cloud.google.com/gke-nodepool": "spot-backend-pool"},
-                        tolerations=[client.V1Toleration(
-                            key="dedicated", operator="Equal", value="spot", effect="NoSchedule"
-                        )],
+                        service_account_name="sagan-backend-ksa", 
                         containers=[client.V1Container(
-                            name="train-job",
-                            image=skaffold_image_sagan_backend,
-                            image_pull_policy="IfNotPresent",   
+                            name="trainer",
+                            image="sagan-backend", 
+                            image_pull_policy="Never",   
                             command=["/app/.venv/bin/python", "-u", "train_job.py"],
-                            volume_mounts=[client.V1VolumeMount(name="fuse-volume", mount_path="/app/data")],
+                            volume_mounts=[client.V1VolumeMount(name="data-storage", 
+                                                                mount_path="/app/data")],
                             resources=client.V1ResourceRequirements(
                                 requests={"memory": "512Mi", "cpu": "500m"},
                                 limits={"memory": "4Gi", "cpu": "1000m"}
                             )
                         )],
                         volumes=[client.V1Volume(
-                            name="fuse-volume", # must match the volume_mounts name
-                            csi=client.V1CSIVolumeSource(
-                                driver="gcsfuse.csi.storage.gke.io",
-                                volume_attributes={
-                                    "bucketName": "sagan-bucket",
-                                    "mountOptions": "uid=1000,gid=1000,file-mode=775,dir-mode=775"
-                                }
+                            name="data-storage",
+                            persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
+                                claim_name="sagan-pvc" 
                             )
                         )]
                     )
@@ -188,43 +158,39 @@ async def handle_text(request: Request, prompt: TextData):
             detail={"message": str(e), "traceback": full_trace}
         )
     
-def get_latest_file_logs(directory, pattern, limit=50):
-    try:
-        files = [f for f in os.listdir(directory) if pattern in f and f.endswith('.log')]
-        if not files: return {}
-        
-        latest = sorted(files)[-1]
-        with open(os.path.join(directory, latest), "r") as f:
-            return {f"main log {latest}": "".join(deque(f, maxlen=limit))}
-    except Exception as e:
-        logger.error(f"main log {latest}error: {e}")
-        return {}
-
-def get_latest_pod_logs(v1, namespace='sagan-app', label='job-group=sagan-train'):
-    try:
-        pods = v1.list_namespaced_pod(namespace, label_selector=label).items
-        if not pods: return {}
-
-        pod = sorted(pods, key=lambda x: x.metadata.creation_timestamp)[-1]
-        name = pod.metadata.name
-        
-        # check if container is ready
-        status = next((s for s in (pod.status.container_statuses or []) if s.name == "train-job"), None)
-        if status and status.state.waiting:
-            return {f"train job log {name}": f"Status: {status.state.waiting.reason}. Waiting for mount..."}
-
-        logs = v1.read_namespaced_pod_log(name=name, namespace=namespace, tail_lines=100)
-        return {f"train job log {name}": logs}
-    except Exception:
-        return {f"train job log {name}": "Initializing logs..."}   
-     
 @app.get("/get_log")
 async def get_log():
-    v1 = client.CoreV1Api()
+    log_dir = "/app/data"
     output = {}
-    output.update(get_latest_file_logs("/app/data", "main"))
-    output.update(get_latest_pod_logs(v1, "sagan-app", "job-group=sagan-train"))
 
+    # force a sync with GCS Fuse
+    try:
+        os.utime(log_dir, None) # touch the directory to invalidate cache
+    except:
+        pass
+    
+    try:
+        # force GCS Fuse to refresh its metadata by listing the directory
+        all_files = os.listdir(log_dir)
+        
+        targets = ['backend', 'train_job']
+        
+        for target in targets:
+            matches = [f for f in all_files if target in f and f.endswith('.log')]
+            
+            if matches:
+                # sort by filename (which includes the timestamp) to get the latest
+                latest_file = sorted(matches)[-1]
+                full_path = os.path.join(log_dir, latest_file)
+                
+                with open(full_path, "r") as f:
+                    # read the last 100 lines
+                    last_lines = deque(f, maxlen=100)
+                    output[latest_file] = "".join(last_lines)
+                    
+    except Exception as e:
+        logger.error(f"Log read error: {e}")
+    
     return output
 
 @app.get("/job_status")
@@ -239,7 +205,7 @@ async def get_job_status():
         name = latest_job.metadata.name
         status = latest_job.status
 
-        # standardize the key to "status"
+        # Standardize the key to "status"
         if status.active:
             return {"status": "Running 🏃", "color": "blue", "name": name}
         if status.succeeded:
@@ -251,7 +217,6 @@ async def get_job_status():
     except Exception as e:
         return {"status": f"Error: {str(e)}", "color": "red", "name": "Error"}
 
-    
 @app.delete("/stop_train")
 async def stop_training():
     try:

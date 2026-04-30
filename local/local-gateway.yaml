@@ -1,0 +1,27 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: sagan-gateway
+  namespace: sagan-app
+spec:
+  # CHANGE: Use a generic class name. 
+  # If using the 'istio' addon in minikube, use 'istio'.
+  gatewayClassName: istio 
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: Same
+  - name: https
+    protocol: HTTPS
+    port: 443
+    hostname: "app.wylderhayes.com"
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: sagan-local-cert # CHANGE: Point to a local Kubernetes Secret
+    allowedRoutes:
+      namespaces:
+        from: Same
