@@ -1,4 +1,4 @@
-import os, uuid, threading, traceback
+import os, uuid, threading, traceback, sqlite3
 from contextlib import asynccontextmanager
 from collections import deque
 
@@ -6,7 +6,7 @@ from anyio.to_thread import run_sync
 
 from fastapi import FastAPI, Request, HTTPException
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from kubernetes import client, config
 
@@ -23,6 +23,33 @@ logger = Metric.setup_logging(log_name='backend.main', log_dir='/app/data')
 
 class TextData(BaseModel):
     content: str
+
+class SimpleTrainConfig(BaseModel):
+    batch_size: int = Field(default=64, ge=1, le=128, description="Batch size must be between 1 and 512")
+    epoch: int = Field(default=1, ge=1, le=10, description="Epochs must be between 1 and 100")
+    n: int = Field(default=5000, ge=100, le=300000, description="Samples must be between 100 and 300k")
+
+DB_PATH = "/app/data/training_history.db"
+
+def init_db():
+    with sqlite3.connect(DB_PATH) as conn:
+        # enable WAL mode for concurrent read/write performance
+        conn.execute("PRAGMA journal_mode=WAL;")
+        
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS job_history (
+                job_name TEXT PRIMARY KEY,
+                batch_size INTEGER,
+                epoch INTEGER,
+                n INTEGER,
+                status TEXT,
+                test_loss REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                finished_at TIMESTAMP
+            )
+        """)
+
+init_db()
 
 def load_k8s_config():
     try:
@@ -108,7 +135,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 @app.post("/train")
-async def trigger_training():
+async def trigger_training(config: SimpleTrainConfig):
 
     skaffold_image_sagan_backend = get_current_image()
     try:
@@ -137,12 +164,16 @@ async def trigger_training():
                         containers=[client.V1Container(
                             name="train-job",
                             image=skaffold_image_sagan_backend,
-                            image_pull_policy="IfNotPresent",   
-                            command=["/app/.venv/bin/python", "-u", "train_job.py"],
+                            image_pull_policy="IfNotPresent",
+                            env=[client.V1EnvVar(name="JOB_NAME", value=job_name)],
+                            command=["/app/.venv/bin/python", "-u", "train_job.py",
+                                     "--batch_size", str(config.batch_size),
+                                     "--epoch", str(config.epoch),
+                                     "--n", str(config.n)],
                             volume_mounts=[client.V1VolumeMount(name="fuse-volume", mount_path="/app/data")],
                             resources=client.V1ResourceRequirements(
-                                requests={"memory": "512Mi", "cpu": "500m"},
-                                limits={"memory": "4Gi", "cpu": "1000m"}
+                                requests={"memory": "1Gi", "cpu": "500m"},
+                                limits={"memory": "5Gi", "cpu": "1000m"}
                             )
                         )],
                         volumes=[client.V1Volume(
@@ -159,16 +190,23 @@ async def trigger_training():
                 )
             )
         )
+
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                "INSERT INTO job_history (job_name, batch_size, epoch, n, status) VALUES (?, ?, ?, ?, ?)",
+                (job_name, config.batch_size, config.epoch, config.n, "Running")
+            )
+
         batch_v1.create_namespaced_job(namespace="sagan-app", body=job)
         logger.info(f"main.trigger_training train job: '{job_name}' in 'sagan-app' namespace.")
-        return {"message": "main.trigger_training train job launched...", "job_id": job_name}
+        return {"message": "main.trigger_training train job launched...", "job_name": job_name}
     except Exception as e:
         logger.error(f"main.trigger_training train job failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     
 @app.post("/prompt")
 async def handle_text(request: Request, prompt: TextData):
-    print(f"DEBUG: Received prompt: {prompt.content}")
+
     learner = request.app.state.learner
     lock = request.app.state.model_lock
     
@@ -239,19 +277,54 @@ async def get_job_status():
         name = latest_job.metadata.name
         status = latest_job.status
 
-        # standardize the key to "status"
         if status.active:
-            return {"status": "Running 🏃", "color": "blue", "name": name}
-        if status.succeeded:
-            return {"status": "Succeeded ✅", "color": "green", "name": name}
-        if status.failed:
-            return {"status": "Failed ❌", "color": "red", "name": name}
-            
-        return {"status": "Pending ⏳", "color": "orange", "name": name}
+            res = {"status": "Running 🏃", "color": "blue", "name": name}
+        elif status.succeeded:
+            res = {"status": "Succeeded ✅", "color": "green", "name": name}
+        elif status.failed:
+            res = {"status": "Failed ❌", "color": "red", "name": name}
+        else:
+            res = {"status": "Pending ⏳", "color": "orange", "name": name}
+
+        # sync with sqlite if the job is finished
+        if status.succeeded or status.failed:
+            final_val = "Succeeded" if status.succeeded else "Failed"
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute("UPDATE job_history SET status = ? WHERE job_name = ?", (final_val, name))
+
+        return res
+
     except Exception as e:
         return {"status": f"Error: {str(e)}", "color": "red", "name": "Error"}
 
-    
+@app.get("/history")
+async def get_history():
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        # SQL math: (finished - created) converted to HH:MM:SS format
+        query = """
+            SELECT *, 
+            CASE 
+                WHEN finished_at IS NOT NULL THEN 
+                    strftime('%H:%M:%S', (julianday(finished_at) - julianday(created_at)), '12:00:00')
+                ELSE 'Running...' 
+            END as training_time
+            FROM job_history 
+            ORDER BY created_at DESC
+        """
+        cursor = conn.execute(query)
+        return [dict(row) for row in cursor.fetchall()]
+
+@app.delete("/history/clear")
+async def clear_history():
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("DELETE FROM job_history")
+        return {"status": "history cleared"}
+    except Exception as e:
+        logger.error(f"failed to clear history: {e}")
+        return {"error": str(e)}, 500
+        
 @app.delete("/stop_train")
 async def stop_training():
     try:
@@ -259,7 +332,7 @@ async def stop_training():
         jobs = batch_v1.list_namespaced_job(namespace="sagan-app")
         
         if not jobs.items:
-            return {"main.stop_training": "No active jobs to stop."}
+            return {"main.stop_training": "no active jobs to stop."}
 
         for job in jobs.items:
             batch_v1.delete_namespaced_job(
@@ -287,3 +360,5 @@ async def reload_model():
 @app.get("/health")
 async def health():
     return {"main.health": "healthy", "mode": "cpu"}  
+
+
