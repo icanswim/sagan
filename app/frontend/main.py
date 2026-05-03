@@ -18,7 +18,7 @@ st.markdown("""
 st.title("🚀 Sagan")
 st.caption("A utility for serving data science applications.")
 
-t1, t2, t3 = st.tabs(["💬 Inference", "🛠️ Training Control", "📜 History"])
+t1, t2, t3 = st.tabs(["💬 inference", "🛠️ training control", "📜 history"])
 
 with t1:
     prompt = st.text_area("Ask Shakespeare...", placeholder="To be or not to be...", height=150)
@@ -31,18 +31,21 @@ with t1:
                 st.error(f"Inference failed: {e}")
 
 with t2:
-    st.subheader("⚙️ GKE Training Control")
+    st.subheader("⚙️ google kubernetes engine training control")
     st.caption("Adjust hyperparameters for the Shakespeare GPT model.")
 
     with st.form("training_params"):
         batch_size = st.number_input(
-            "Batch Size", value=64, min_value=1, max_value=512, step=8)
+            "batch size", value=64, min_value=8, max_value=168, step=8, 
+            help="8 <= bs <= 168")
         epoch = st.number_input(
-            "Epochs", value=1, min_value=1, max_value=100, step=1)
+            "epochs", value=1, min_value=1, max_value=10, step=1, 
+            help="1 <= epochs <= 10")
         n_samples = st.number_input(
-            "Samples (n)", value=5000, min_value=100, max_value=300000, step=100)
+            "samples (n)", value=2000, min_value=1000, max_value=300000, step=1000, 
+            help="100 <= n <= 300k")
 
-        submitted = st.form_submit_button("🔥 Start Training", type="primary", use_container_width=True)
+        submitted = st.form_submit_button("🔥 start training", type="primary", use_container_width=True)
         
         if submitted:
             payload = {
@@ -55,38 +58,42 @@ with t2:
                 if res.status_code == 200:
                     st.success("Training job submitted!")
                 else:
-                    st.error(f"Backend error: {res.status_code}")
+                    try:
+                        error_detail = res.json().get("detail", "Unknown error")
+                        st.error(f"❌ {error_detail}")
+                    except:
+                        st.error(f"Backend error: {res.status_code}")
             except Exception as e:
                 st.error(f"Failed to connect to backend: {e}")
 
     sc1, sc2 = st.columns(2)
     with sc1:
-        if st.button("🛑 Stop Training", use_container_width=True, type="secondary"):
+        if st.button("🛑 stop training", use_container_width=True, type="secondary"):
             try:
                 requests.delete(f"{BACKEND_URL}/stop_train")
-                st.info("Stop signal sent.")
+                st.info("stop signal sent...")
             except:
-                st.error("Could not reach backend.")
+                st.error("could not reach backend...")
     with sc2:
-        if st.button("🔄 Sync Weights", use_container_width=True):
+        if st.button("🔄 sync weights", use_container_width=True):
             try:
                 res = requests.post(f"{BACKEND_URL}/reload_model")
-                st.toast(res.json().get("status", "Syncing..."))
+                st.toast(res.json().get("status", "syncing..."))
             except:
-                st.error("Sync failed.")
+                st.error("sync failed.")
 
 with t3:
-    st.subheader("📜 Past Training Runs")
+    st.subheader("📜 past training runs")
 
     @st.fragment(run_every="10s")
     def refresh_history():
-        if st.button("🗑️ Clear All History", type="secondary", use_container_width=True):
+        if st.button("🗑️ clear all history", type="secondary", use_container_width=True):
             try:
                 res = requests.delete(f"{BACKEND_URL}/history/clear", timeout=5)
                 if res.status_code == 200:
                     st.toast("History wiped!")
             except Exception as e:
-                st.error(f"Request failed: {e}")
+                st.error(f"request failed: {e}")
         try:
             res = requests.get(f"{BACKEND_URL}/history", timeout=2)
             if res.status_code == 200:
@@ -98,24 +105,24 @@ with t3:
                         hide_index=True,
                         column_order=("job_name", "batch_size", "epoch", "n", "status", "test_loss", "created_at", "training_time"),
                         column_config={
-                            "job_name": st.column_config.TextColumn("Job Name"),
-                            "test_loss": st.column_config.NumberColumn("Loss 📉", format="%.4f"),
-                            "training_time": st.column_config.TextColumn("Duration"),
+                            "job_name": st.column_config.TextColumn("job name"),
+                            "test_loss": st.column_config.NumberColumn("loss 📉", format="%.4f"),
+                            "training_time": st.column_config.TextColumn("training time"),
                         }
                     )
                 else:
-                    st.info("No training history found.")
+                    st.info("no training history found.")
             else:
-                st.error(f"Backend error: {res.status_code}")
+                st.error(f"backend error: {res.status_code}")
         except Exception as e:
-            st.error(f"Could not load history: {e}")
+            st.error(f"could not load history: {e}")
 
     refresh_history()
 # training monitor
 st.markdown('<div class="footer-container"></div>', unsafe_allow_html=True)
-st.subheader("📝 Training Monitor")
+st.subheader("📝 training monitor")
 
-stream_enabled = st.toggle("Live Stream", value=True)
+stream_enabled = st.toggle("live stream", value=True)
 
 @st.fragment(run_every="5s")
 def sync_footer_fragment(enabled):
@@ -147,11 +154,11 @@ def sync_footer_fragment(enabled):
                     content = display_logs[filename]
                     
                     if "train" in filename:
-                        st.caption(f"🔥 Training Stream GKE Live: {filename}")
+                        st.caption(f"🔥 training cluster live: {filename}")
                         st.code(content, language="text")
                     
                     elif "main" in filename:
-                        st.caption(f"🖥️ Backend Activity: {filename}")
+                        st.caption(f"🖥️ backend activity: {filename}")
                         st.code(content, language="text")
             else:
                 st.info("waiting for logs from backend...")
