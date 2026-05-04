@@ -86,7 +86,6 @@ def run_training(d_model=384, d_vec=384, d_seq=25, d_gen=25, d_vocab=50304,
     try:
         out = learner.run_experiment()
         logger.info("train-job complete... {}".format(out))
-        job_name = os.environ.get("JOB_NAME")
         test_loss = out.get('test_loss') if isinstance(out, dict) else None
         update_db("succeeded", test_loss)
     except Exception as e:

@@ -43,7 +43,7 @@ with t2:
             help="1 <= epochs <= 10")
         n_samples = st.number_input(
             "samples (n)", value=2000, min_value=1000, max_value=300000, step=1000, 
-            help="100 <= n <= 300k")
+            help="1000 <= n <= 300k")
 
         submitted = st.form_submit_button("🔥 start training", type="primary", use_container_width=True)
         

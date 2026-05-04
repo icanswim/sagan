@@ -2,14 +2,15 @@ import os, uuid, threading, traceback, sqlite3
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from collections import deque
+import asyncio
 
 from anyio.to_thread import run_sync
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Response
 
 from pydantic import BaseModel, Field
 
-from kubernetes import client, config
+from kubernetes import client, config, watch
 
 from torch import long
 from torch.optim import Adam
@@ -75,6 +76,64 @@ def get_current_image():
         logger.warning(f"could not fetch image name from api: {e}")
         return "sagan-backend:latest"
     
+async def k8s_db_sync():
+    load_k8s_config()
+    batch_v1 = client.BatchV1Api()
+    w = watch.Watch()
+    
+    while True:
+        try:
+            jobs_list = batch_v1.list_namespaced_job(
+                namespace="sagan-app", label_selector="job-group=sagan-train"
+            )
+            resource_version = jobs_list.metadata.resource_version
+            active_k8s_names = {j.metadata.name for j in jobs_list.items}
+
+            with sqlite3.connect(DB_PATH) as conn:
+                # mark jobs failed if they are running in db but missing from k8s
+                db_running = conn.execute("SELECT job_name FROM job_history WHERE status = 'Running'").fetchall()
+                for row in db_running:
+                    if row[0] not in active_k8s_names:
+                        conn.execute(
+                            "UPDATE job_history SET status = 'Failed', finished_at = ? WHERE job_name = ?",
+                            (datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%SZ'), row[0])
+                        )
+
+            # stream job events
+            stream = w.stream(
+                batch_v1.list_namespaced_job,
+                namespace="sagan-app",
+                label_selector="job-group=sagan-train",
+                resource_version=resource_version,
+                timeout_seconds=300
+            )
+
+            for event in stream:
+                job = event['object']
+                status = job.status
+                job_name = job.metadata.name
+                
+                # check for silent conditions
+                is_failed = (status.failed or 0) > 0 or any(
+                    c.type == "Failed" and c.status == "True" for c in (status.conditions or [])
+                )
+                is_succeeded = (status.succeeded or 0) > 0
+
+                if is_succeeded or is_failed:
+                    final_status = "Succeeded" if is_succeeded else "Failed"
+                    finished_at = status.completion_time or (status.conditions[-1].last_transition_time if status.conditions else None) or datetime.now(timezone.utc)
+                    finished_str = finished_at.strftime('%Y-%m-%d %H:%M:%SZ')
+
+                    with sqlite3.connect(DB_PATH) as conn:
+                        conn.execute("""
+                            UPDATE job_history SET status = ?, finished_at = ? 
+                            WHERE job_name = ? AND status = 'Running'
+                        """, (final_status, finished_str, job_name))
+
+        except Exception as e:
+            logger.error(f"Sync error: {e}")
+            await asyncio.sleep(5)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
@@ -132,6 +191,15 @@ async def lifespan(app: FastAPI):
     app.state.model_lock = threading.Lock()
     logger.info("main.lifespan inference engine initialized..")
     yield
+    watcher_task = asyncio.create_task(k8s_db_sync())
+    try:
+        # Keep the lifespan alive until shutdown
+        # Use an event or a loop to stay here
+        while True:
+            await asyncio.sleep(1)
+    finally:
+        watcher_task.cancel()
+        logger.info("Sync task cancelled.")
 
 app = FastAPI(lifespan=lifespan)
 
@@ -295,49 +363,49 @@ async def get_log():
     return output
 
 @app.get("/job_status")
-async def get_job_status():
+async def get_job_status(response: Response):
+    # Standard headers to prevent browser caching of the status
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+
     try:
         batch_v1 = client.BatchV1Api()
-        jobs = batch_v1.list_namespaced_job(namespace="sagan-app")
+        jobs = batch_v1.list_namespaced_job(
+            namespace="sagan-app", 
+            label_selector="job-group=sagan-train"
+        )
+        
         if not jobs.items:
             return {"status": "no jobs found", "color": "gray", "name": "N/A"}
 
-        # get the most recent job
+        # Get the latest job by creation time
         latest_job = sorted(jobs.items, key=lambda x: x.metadata.creation_timestamp)[-1]
-        job_name = latest_job.metadata.name
         status = latest_job.status
+        job_name = latest_job.metadata.name
 
-        # map k8s status to ui feedback
+        # 1. Check for failure (Explicit or Silent/Condition-based)
+        is_failed = (status.failed or 0) > 0 or any(
+            c.type == "Failed" and c.status == "True" for c in (status.conditions or [])
+        )
+        
+        if is_failed:
+            return {"status": "failed ❌", "color": "red", "name": job_name}
+
+        # 2. Check for success
+        if status.succeeded:
+            return {"status": "succeeded ✅", "color": "green", "name": job_name}
+
+        # 3. Check for active/running
         if status.active:
-            res = {"status": "running 🏃", "color": "blue", "name": job_name}
-        elif status.succeeded:
-            res = {"status": "succeeded ✅", "color": "green", "name": job_name}
-        elif status.failed:
-            res = {"status": "failed ❌", "color": "red", "name": job_name}
-        else:
-            res = {"status": "pending ⏳", "color": "orange", "name": job_name}
+            return {"status": "running 🏃", "color": "blue", "name": job_name}
 
-        if status.succeeded or status.failed:
-            final_status = "Succeeded" if status.succeeded else "Failed"
-            
-            k8s_finished_at = status.completion_time or datetime.now(timezone.utc)
-
-            # format as 'YYYY-MM-DD HH:MM:SSZ'
-            # sqlite3 julianday() handles the 'Z' correctly, treating it as UTC
-            finished_str = k8s_finished_at.strftime('%Y-%m-%d %H:%M:%SZ')
-
-            with sqlite3.connect(DB_PATH) as conn:
-                conn.execute("""
-                    UPDATE job_history 
-                    SET status = ?, finished_at = ? 
-                    WHERE job_name = ?
-                """, (final_status, finished_str, job_name))
-
-        return res
+        # 4. Fallback for pending/orphaned states
+        return {"status": "pending ⏳", "color": "orange", "name": job_name}
 
     except Exception as e:
-        logger.error(f"Error in get_job_status: {e}")
-        return {"status": f"error: {str(e)}", "color": "red", "name": "Error"}
+        logger.error(f"UI Status Error: {e}")
+        return {"status": "error", "color": "red", "name": str(e)}
 
 @app.get("/history")
 async def get_history():
