@@ -1,143 +1,389 @@
-import os, uuid, threading, traceback, sqlite3
+import os, uuid, traceback, sqlite3
+import asyncio, threading
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
-from collections import deque
-import asyncio
 
-from anyio.to_thread import run_sync
-
-from fastapi import FastAPI, Request, HTTPException, Response
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.concurrency import run_in_threadpool
 
 from pydantic import BaseModel, Field
 
-from kubernetes import client, config, watch
+from kubernetes import client, config
 
 from torch import long
-from torch.optim import Adam
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from gpt.dataset import TinyShakes
 from cosmosis.learning import Learn, Metric, Selector
 from cosmosis.model import GPT
 from cosmosis.dataset import AsTensor
 
-logger = Metric.setup_logging(log_name='backend.main', log_dir='/app/data')
+DB_PATH = "/app/data/job_history.db"
+NAMESPACE = "sagan-app"
+JOB_SELECTOR = "job-group=sagan-train"
+BACKEND_SELECTOR = "app=sagan-backend"
+
+
+logger = Metric.setup_logging(log_name='backend.main')
+
+def load_k8s_config():
+    # local and remote config loading
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config()
+
+load_k8s_config()
+
+batch_v1 = client.BatchV1Api()
+core_v1 = client.CoreV1Api()
+
+class FrontendCache:
+    def __init__(self):
+        self.cache = {}
+        self.lock = threading.Lock()
+
+    def set(self, key_or_dict, value=None):
+        if value is None:
+            value = []
+            
+        with self.lock:
+            if isinstance(key_or_dict, dict):
+                self.cache.update(key_or_dict)
+            else:
+                self.cache[key_or_dict] = value
+
+    def get(self, key, default=None):
+        if default is None:
+            default = []
+            
+        with self.lock:
+            return self.cache.get(key, default)
+
 
 class TextData(BaseModel):
     content: str
+
 
 class SimpleTrainConfig(BaseModel):
     batch_size: int = Field(default=64, ge=1, le=168, description="1 <= bs <= 168")
     epoch: int = Field(default=1, ge=1, le=10, description="1 <= epoch <= 10")
     n: int = Field(default=2000, ge=1000, le=300000, description="1000 <= n <= 300k")
 
-DB_PATH = "/app/data/training_history.db"
 
-def init_db():
-    with sqlite3.connect(DB_PATH) as conn:
-        # enable WAL mode for concurrent read/write performance
+class DatabaseManager:
+
+    ALLOWED_COLUMNS = {
+        "batch_size": "INTEGER",
+        "epoch": "INTEGER",
+        "n": "INTEGER",
+        "status": "TEXT",
+        "test_loss": "REAL",
+        "created_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        "finished_at": "TIMESTAMP"
+    }
+
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self._init_db()
+
+    def _get_connection(self, parse_types: bool = True) -> sqlite3.Connection:
+        # parse_types true for python datetime objects, false for raw strings
+        detect = sqlite3.PARSE_DECLTYPES if parse_types else 0
+        conn = sqlite3.connect(self.db_path, detect_types=detect)
         conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        return conn
+
+    def _init_db(self) -> None:
+        dynamic_schema = ", ".join([f"{col} {datatype}" for col, datatype in self.ALLOWED_COLUMNS.items()])
         
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS job_history (
-                job_name TEXT PRIMARY KEY,
-                batch_size INTEGER,
-                epoch INTEGER,
-                n INTEGER,
-                status TEXT,
-                test_loss REAL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                finished_at TIMESTAMP
-            )
-        """)
+        with self._get_connection() as conn:
+            query = f"""
+                CREATE TABLE IF NOT EXISTS job_history (
+                    job_name TEXT PRIMARY KEY,
+                    {dynamic_schema}
+                )
+            """
+            conn.execute(query)
+            conn.commit()
 
-init_db()
+    def update(self, job_name: str, metric_update: dict) -> None:
+        filtered_updates = {
+            k: v for k, v in metric_update.items() 
+            if k in self.ALLOWED_COLUMNS and k != "created_at"
+        }
+        
+        if not filtered_updates and job_name:
+            return
 
-def load_k8s_config():
-    try:
-        config.load_incluster_config()
-    except config.ConfigException:
-        config.load_kube_config()
+        columns = ["job_name"] + list(filtered_updates.keys())
+        placeholders = ", ".join(["?"] * len(columns))
+        
+        set_clause = ", ".join([f"{col} = excluded.{col}" for col in filtered_updates.keys()])
+        query_values = (job_name,) + tuple(filtered_updates.values())
+
+        with self._get_connection() as conn:
+            query = f"""
+                INSERT INTO job_history ({", ".join(columns)})
+                VALUES ({placeholders})
+                ON CONFLICT(job_name) DO UPDATE SET
+                {set_clause}
+            """
+            conn.execute(query, query_values)
+            conn.commit()
+
+    def get_job_history(self, limit: int = None) -> list[dict]:
+        with self._get_connection(parse_types=False) as conn:
+            conn.row_factory = sqlite3.Row
+            
+            query = """
+                SELECT *, 
+                CASE 
+                    WHEN finished_at IS NOT NULL THEN 
+                        printf('%02d:%02d:%02d', 
+                            CAST((julianday(finished_at) - julianday(created_at)) * 24 AS INT),
+                            CAST(((julianday(finished_at) - julianday(created_at)) * 1440) % 60 AS INT),
+                            CAST(((julianday(finished_at) - julianday(created_at)) * 86400) % 60 AS INT)
+                        )
+                    WHEN status = 'running' THEN 
+                        printf('%02d:%02d:%02d', 
+                            CAST((julianday('now') - julianday(created_at)) * 24 AS INT),
+                            CAST(((julianday('now') - julianday(created_at)) * 1440) % 60 AS INT),
+                            CAST(((julianday('now') - julianday(created_at)) * 86400) % 60 AS INT)
+                        )
+                    ELSE '00:00:00'
+                END as training_time
+                FROM job_history 
+                ORDER BY created_at DESC
+            """
+            
+            params = []
+            if limit is not None:
+                query += " LIMIT ?"
+                params.append(limit)
+                
+            cursor = conn.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+        
+    def get_running_jobs(self) -> list[str]:
+        with self._get_connection(parse_types=False) as conn:
+            conn.row_factory = sqlite3.Row
+            return [row['job_name'] for row in conn.execute(
+                "SELECT job_name FROM job_history WHERE status = 'running'"
+            ).fetchall()]
+        
+    def rectify(self, zombies: list[str]) -> None:
+        if not zombies:
+            return
+
+        timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        update_data = [(timestamp, name) for name in zombies]
+        
+        for name in zombies:
+            logger.warning(f"silent failure detected: {name}")
+            
+        with self._get_connection(parse_types=False) as conn:
+            conn.executemany("""
+                UPDATE job_history 
+                SET status = 'silent failure', finished_at = ? 
+                WHERE job_name = ?
+            """, update_data)
+            conn.commit()
+
 
 def get_current_image():
-    # try and get env var image:tag from skaffold
     env_image = os.getenv("SKAFFOLD_IMAGE_SAGAN_BACKEND")
     if env_image and env_image != "sagan-backend":
         return env_image
-    # use kubernetes api to get image name and current tag
+
+    pod_name = os.getenv("HOSTNAME")
+    if not pod_name:
+        return "sagan-backend"
+        
     try:
-        config.load_incluster_config()
-        v1 = client.CoreV1Api()
-        pod_name = os.getenv("HOSTNAME") 
-        pod = v1.read_namespaced_pod(name=pod_name, namespace="sagan-app")
-        # grab the image from the first container
+        pod = core_v1.read_namespaced_pod(name=pod_name, namespace=NAMESPACE)
         return pod.spec.containers[0].image
+    except ApiException as e:
+        logger.error(f"failed to read current pod spec: {e}")
+        return "sagan-backend"
+ 
+def get_jobs():
+    jobs = batch_v1.list_namespaced_job(namespace=NAMESPACE, label_selector=JOB_SELECTOR)
+    job_items = getattr(jobs, 'items', []) or []
+
+    if not job_items:
+        return {"status": "no jobs found", "color": "gray"}
+
+    sorted_jobs = sorted(job_items, key=lambda x: getattr(x.metadata, 'creation_timestamp', None) or "")
+    return sorted_jobs 
+
+def get_pods():
+    pods = core_v1.list_namespaced_pod(namespace=NAMESPACE, label_selector=JOB_SELECTOR)
+    pod_items = getattr(pods, 'items', []) or []
+    
+    sorted_pods = sorted(pod_items, key=lambda x: getattr(x.metadata, 'creation_timestamp', None) or "")
+    return sorted_pods
+
+def get_containers(pod):
+    spec = getattr(pod, 'spec', None)
+    if not spec:
+        logger.warning(f"main.get_containers: received pod object without a valid spec schema: {type(pod)}")
+        return []
+        
+    init = getattr(spec, 'init_containers', []) or []
+    app = getattr(spec, 'containers', []) or []
+    return [c.name for c in init + app]
+
+def get_container_log(pod_name, container_name):
+    try:
+        container_log = core_v1.read_namespaced_pod_log(
+            name=pod_name, 
+            namespace=NAMESPACE, 
+            container=container_name,
+            tail_lines=100,
+            _request_timeout=4,
+        )
+        return container_log
+    except ApiException as e:
+        logger.warning(f"could not read logs for pod {pod_name}/{container_name}: {e.reason}")
+        return f"unable to fetch logs from kubernetes api: {e.reason}"
     except Exception as e:
-        logger.warning(f"could not fetch image name from api: {e}")
-        return "sagan-backend:latest"
+        logger.exception(f"unexpected system error reading logs for {pod_name}")
+        return f"system error loading log history: {e}"
+
+def loop():
+
+    out = {
+        "status": "",
+        "color": "green" 
+    }
     
-async def k8s_db_sync():
-    load_k8s_config()
-    batch_v1 = client.BatchV1Api()
-    w = watch.Watch()
+    sorted_pods = get_pods()
+    if not sorted_pods:
+        out['status'] = "no training pods found..."
+        out['color'] = "yellow"
+        return out
     
+    for pod in sorted_pods:
+        container_names = get_containers(pod)
+        metadata = getattr(pod, 'metadata', None)
+        if not metadata:
+            continue
+            
+        pod_name = getattr(metadata, 'name', "unknown")
+        pod_suffix = f" ({pod_name})" if len(sorted_pods) > 1 else ""
+        
+        status_obj = getattr(pod, 'status', None)
+        container_statuses = getattr(status_obj, 'container_statuses', []) or []
+        
+        for container_name in container_names:
+            if container_name in ["sagan-backend", "train-job"]: 
+                container_log = get_container_log(pod_name, container_name)
+                out[f'{container_name}-log{pod_suffix}'] = f"--- pod: {pod_name}, container: {container_name} ---\n{container_log}\n"
+            
+            if container_name == "train-job":
+                log_key = f'train-job-log{pod_suffix}'
+                if log_key not in out:
+                    out[log_key] = ""
+
+                if not container_statuses:
+                    out[log_key] += "no container statuses found for this pod.\n"
+                else:
+                    for cs in container_statuses:
+                        if cs.name == container_name:
+                            state = cs.state
+                            if not state:
+                                continue
+                                
+                            if state.waiting:
+                                out['status'] += f"Status{pod_suffix}: Waiting | Reason: {state.waiting.reason}\n"
+                                if state.waiting.reason in ["ImagePullBackOff", "ErrImagePull", "CreateContainerConfigError"]:
+                                    out['status'] += f"⚠️ Container is STUCK during setup: {state.waiting.reason}\n"
+                                    out['color'] = "red" 
+                                elif out['color'] not in ["red", "blue"]:
+                                    out['color'] = "yellow"
+                            
+                            elif state.running:
+                                out['status'] += f"Status{pod_suffix}: Running 🏃\n"
+                                if out['color'] != "red":
+                                    out['color'] = "blue"
+                            
+                            elif state.terminated:
+                                out['status'] += f"Status{pod_suffix}: Terminated | Exit Code: {state.terminated.exit_code} | Reason: {state.terminated.reason}\n"
+                                if state.terminated.reason == "OOMKilled":
+                                    out['status'] += "🚫 Container ran out of memory (OOMKilled).\n"
+                                    out['color'] = "red"
+                                elif state.terminated.exit_code == 0:
+                                    out['status'] += "✅ Container completed successfully.\n"
+                                    # Don't downgrade from red or blue
+                                    if out['color'] not in ["red", "blue"]:
+                                        out['color'] = "green"
+                                else:
+                                    out['status'] += "❌ Container failed with non-zero exit code.\n"
+                                    out['color'] = "red"
+
+        # check pod-level eviction status
+        if status_obj and getattr(status_obj, 'phase', None) == "Failed" and getattr(status_obj, 'reason', None) == "Evicted":
+            if "train-job" in container_names:
+                out['status'] += f"📉 Pod Evicted ({pod_name}): Node ran out of disk or resource capacity.\n"
+                out['color'] = "red"
+
+    if not out['status'].strip():
+        out['status'] = "no training pods found..."
+        out['color'] = "yellow"
+
+    return out
+
+
+async def monitor_loop(frontend_cache: FrontendCache, db_manager: DatabaseManager):
+    """
+    monitors kubernetes for job updates and caches results for frontend retrieval.
+    """
     while True:
         try:
-            jobs_list = batch_v1.list_namespaced_job(
-                namespace="sagan-app", label_selector="job-group=sagan-train"
-            )
-            resource_version = jobs_list.metadata.resource_version
-            active_k8s_names = {j.metadata.name for j in jobs_list.items}
-
-            with sqlite3.connect(DB_PATH) as conn:
-                # mark jobs failed if they are running in db but missing from k8s
-                db_running = conn.execute("SELECT job_name FROM job_history WHERE status = 'Running'").fetchall()
-                for row in db_running:
-                    if row[0] not in active_k8s_names:
-                        conn.execute(
-                            "UPDATE job_history SET status = 'Failed', finished_at = ? WHERE job_name = ?",
-                            (datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%SZ'), row[0])
-                        )
-
-            # stream job events
-            stream = w.stream(
-                batch_v1.list_namespaced_job,
-                namespace="sagan-app",
-                label_selector="job-group=sagan-train",
-                resource_version=resource_version,
-                timeout_seconds=300
-            )
-
-            for event in stream:
-                job = event['object']
-                status = job.status
-                job_name = job.metadata.name
+            output = await run_in_threadpool(loop)
+            
+            if output['status'] == "no training pods found...":
+                db_manager.rectify(db_manager.get_running_jobs())
+                output['history'] = db_manager.get_job_history(limit=10)
                 
-                # check for silent conditions
-                is_failed = (status.failed or 0) > 0 or any(
-                    c.type == "Failed" and c.status == "True" for c in (status.conditions or [])
-                )
-                is_succeeded = (status.succeeded or 0) > 0
-
-                if is_succeeded or is_failed:
-                    final_status = "Succeeded" if is_succeeded else "Failed"
-                    finished_at = status.completion_time or (status.conditions[-1].last_transition_time if status.conditions else None) or datetime.now(timezone.utc)
-                    finished_str = finished_at.strftime('%Y-%m-%d %H:%M:%SZ')
-
-                    with sqlite3.connect(DB_PATH) as conn:
-                        conn.execute("""
-                            UPDATE job_history SET status = ?, finished_at = ? 
-                            WHERE job_name = ? AND status = 'Running'
-                        """, (final_status, finished_str, job_name))
-
+            frontend_cache.set(output)
+            interval = 30 if output['status'] == "no training pods found..." else 2
+            await asyncio.sleep(interval)
+                
+        except asyncio.CancelledError:
+            logger.info("main.monitor_loop shutting down...")
+            raise 
+            
         except Exception as e:
-            logger.error(f"Sync error: {e}")
-            await asyncio.sleep(5)
+            logger.error(f"error in main.monitor_loop: {e}. retrying in 5 seconds...", exc_info=True)
+            try:
+                await asyncio.sleep(5)
+            except asyncio.CancelledError:
+                raise
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    db_manager = DatabaseManager(DB_PATH)
+    frontend_cache = FrontendCache()
+    app.state.frontend_cache = frontend_cache
+    
+    monitor_task = asyncio.create_task(monitor_loop(frontend_cache, db_manager))
+    logger.info("monitor_loop started...")
+    
+    try:
+        yield
+    finally:
+        logger.info("shutting down monitor_loop...")
+        monitor_task.cancel()
+        try:
+            await monitor_task
+        except asyncio.CancelledError:
+            logger.info("monitor_loop task successfully cancelled.")
+        except Exception as e:
+            logger.error(f"error during monitor_loop shutdown: {e}")
 
-    load_k8s_config()
 
     dir = "/app/data"
     d_seq = 25 # dimension sequence (context window size/prompt length)
@@ -189,266 +435,73 @@ async def lifespan(app: FastAPI):
         gpu=False)
     
     app.state.model_lock = threading.Lock()
-    logger.info("main.lifespan inference engine initialized..")
-    yield
-    watcher_task = asyncio.create_task(k8s_db_sync())
-    try:
-        # Keep the lifespan alive until shutdown
-        # Use an event or a loop to stay here
-        while True:
-            await asyncio.sleep(1)
-    finally:
-        watcher_task.cancel()
-        logger.info("Sync task cancelled.")
 
 app = FastAPI(lifespan=lifespan)
 
-@app.post("/train")
-async def trigger_training(config: SimpleTrainConfig):
-    skaffold_image_sagan_backend = get_current_image()
-    
-    try:
-        # check db for any running job
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.row_factory = sqlite3.Row
-            active_job = conn.execute(
-                "SELECT job_name FROM job_history WHERE status = 'Running'"
-            ).fetchone()
-            if active_job:
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"job '{active_job['job_name']}' is still running..."
-                )
-
-        # check api for any existing job (even if finished/zombie)
-        batch_v1 = client.BatchV1Api()
-        existing_jobs = batch_v1.list_namespaced_job(
-            namespace="sagan-app",
-            label_selector="job-group=sagan-train" 
-        )
-        if existing_jobs.items:
-            raise HTTPException(
-                status_code=400,
-                detail="an old job is still shutting down...."
-            )
-
-        job_name = f"sagan-train-{uuid.uuid4().hex[:6]}"
-        job = client.V1Job(
-            api_version="batch/v1",
-            kind="Job",
-            metadata=client.V1ObjectMeta(name=job_name),
-            spec=client.V1JobSpec(
-                backoff_limit=0,
-                ttl_seconds_after_finished=30, 
-                active_deadline_seconds=180, 
-                template=client.V1PodTemplateSpec(
-                    metadata=client.V1ObjectMeta(
-                        labels={"job-group": "sagan-train"},
-                        annotations={"gke-gcsfuse/volumes": "true"}
-                    ),
-                    spec=client.V1PodSpec(
-                        service_account_name="sagan-backend-ksa",
-                        restart_policy="Never",
-                        node_selector={"cloud.google.com/gke-nodepool": "spot-backend-pool"},
-                        tolerations=[client.V1Toleration(
-                            key="dedicated", operator="Equal", value="spot", effect="NoSchedule"
-                        )],
-                        containers=[client.V1Container(
-                            name="train-job",
-                            image=skaffold_image_sagan_backend,
-                            image_pull_policy="IfNotPresent",
-                            env=[client.V1EnvVar(name="JOB_NAME", value=job_name)],
-                            command=["/app/.venv/bin/python", "-u", "train_job.py",
-                                     "--batch_size", str(config.batch_size),
-                                     "--epoch", str(config.epoch),
-                                     "--n", str(config.n)],
-                            volume_mounts=[client.V1VolumeMount(name="fuse-volume", mount_path="/app/data")],
-                            resources=client.V1ResourceRequirements(
-                                requests={"memory": "2.5Gi", "cpu": "500m"},
-                                limits={"memory": "4Gi", "cpu": "1000m"}
-                            )
-                        )],
-                        volumes=[client.V1Volume(
-                            name="fuse-volume",
-                            csi=client.V1CSIVolumeSource(
-                                driver="gcsfuse.csi.storage.gke.io",
-                                volume_attributes={
-                                    "bucketName": "sagan-bucket",
-                                    "mountOptions": "uid=1000,gid=1000,file-mode=775,dir-mode=775"
-                                }
-                            )
-                        )]
-                    )
-                )
-            )
-        )
-
-        batch_v1.create_namespaced_job(namespace="sagan-app", body=job)
-
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.execute(
-                "INSERT INTO job_history (job_name, batch_size, epoch, n, status, created_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
-                (job_name, config.batch_size, config.epoch, config.n, "Running")
-            )
-
-        logger.info(f"main.trigger_training train job: '{job_name}' launched.")
-        return {"message": "job launched successfully", "job_name": job_name}
-
-    except HTTPException as he:
-        raise he 
-    except Exception as e:
-        logger.error(f"main.trigger_training train job failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/prompt")
-async def handle_text(request: Request, prompt: TextData):
-
-    learner = request.app.state.learner
-    lock = request.app.state.model_lock
-    
-    def locked_predict(text_input: str):
-        with lock:
-            return learner.run_experiment(prompt=text_input)
-    try:
-        response = await run_sync(locked_predict, prompt.content)
-        logger.info(f"prompt: {prompt.content}\nresponse {response}")
-        # match frontend's expected key "response"
-        return {"response": response} 
-    except Exception as e:
-        full_trace = traceback.format_exc()
-        logger.error(f"main.handle_text failed: {e}\n{full_trace}")
-        raise HTTPException(
-            status_code=500, 
-            detail={"message": str(e), "traceback": full_trace}
-        )
-    
-def get_latest_file_logs(directory, pattern, limit=50):
-    try:
-        files = [f for f in os.listdir(directory) if pattern in f and f.endswith('.log')]
-        if not files: return {}
-        
-        latest = sorted(files)[-1]
-        with open(os.path.join(directory, latest), "r") as f:
-            return {f"main log {latest}": "".join(deque(f, maxlen=limit))}
-    except Exception as e:
-        logger.error(f"main log {latest}error: {e}")
-        return {}
-
-def get_latest_pod_logs(v1, namespace='sagan-app', label='job-group=sagan-train'):
-    try:
-        pods = v1.list_namespaced_pod(namespace, label_selector=label).items
-        if not pods: return {}
-
-        pod = sorted(pods, key=lambda x: x.metadata.creation_timestamp)[-1]
-        name = pod.metadata.name
-        
-        # check if container is ready
-        status = next((s for s in (pod.status.container_statuses or []) if s.name == "train-job"), None)
-        if status and status.state.waiting:
-            return {f"train job log {name}": f"Status: {status.state.waiting.reason}. waiting for mount..."}
-
-        logs = v1.read_namespaced_pod_log(name=name, namespace=namespace, tail_lines=100)
-        return {f"train job log {name}": logs}
-    except Exception:
-        return {f"train job log {name}": "initializing logs..."}   
-     
-@app.get("/get_log")
-async def get_log():
-    v1 = client.CoreV1Api()
-    output = {}
-    output.update(get_latest_file_logs("/app/data", "main"))
-    output.update(get_latest_pod_logs(v1, "sagan-app", "job-group=sagan-train"))
-
-    return output
-
-@app.get("/job_status")
-async def get_job_status(response: Response):
-    # Standard headers to prevent browser caching of the status
+@app.middleware("http")
+async def add_no_cache_headers(request: Request, call_next):
+    response = await call_next(request)
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
+    return response
 
-    try:
-        batch_v1 = client.BatchV1Api()
-        jobs = batch_v1.list_namespaced_job(
-            namespace="sagan-app", 
-            label_selector="job-group=sagan-train"
-        )
-        
-        if not jobs.items:
-            return {"status": "no jobs found", "color": "gray", "name": "N/A"}
+@app.get("/get_log")
+async def get_log(request: Request): 
+    data = {}
+    cache = request.app.state.frontend_cache
+    log_keys = [key for key in cache.cache.keys() if 'log' in key]
+    for k in log_keys:
+        data[k] = cache.get(k)
+    return data if data else {"status": "no log data", "color": "gray", "name": "N/A"}
 
-        # Get the latest job by creation time
-        latest_job = sorted(jobs.items, key=lambda x: x.metadata.creation_timestamp)[-1]
-        status = latest_job.status
-        job_name = latest_job.metadata.name
-
-        # 1. Check for failure (Explicit or Silent/Condition-based)
-        is_failed = (status.failed or 0) > 0 or any(
-            c.type == "Failed" and c.status == "True" for c in (status.conditions or [])
-        )
-        
-        if is_failed:
-            return {"status": "failed ❌", "color": "red", "name": job_name}
-
-        # 2. Check for success
-        if status.succeeded:
-            return {"status": "succeeded ✅", "color": "green", "name": job_name}
-
-        # 3. Check for active/running
-        if status.active:
-            return {"status": "running 🏃", "color": "blue", "name": job_name}
-
-        # 4. Fallback for pending/orphaned states
-        return {"status": "pending ⏳", "color": "orange", "name": job_name}
-
-    except Exception as e:
-        logger.error(f"UI Status Error: {e}")
-        return {"status": "error", "color": "red", "name": str(e)}
+@app.get("/job_status")
+async def get_job_status(request: Request):
+    cache: FrontendCache = request.app.state.frontend_cache
+    
+    status = cache.get('status', default="no job status data")
+    color = cache.get('color', default="gray")
+    
+    return {
+        "status": status,
+        "color": color
+    }
 
 @app.get("/history")
-async def get_history():
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        query = """
-            SELECT *, 
-            CASE 
-                WHEN finished_at IS NOT NULL THEN 
-                    printf('%02d:%02d:%02d', 
-                        (julianday(finished_at) - julianday(created_at)) * 24,
-                        ((julianday(finished_at) - julianday(created_at)) * 1440) % 60,
-                        ((julianday(finished_at) - julianday(created_at)) * 86400) % 60
-                    )
-                WHEN status = 'Running' THEN 
-                    printf('%02d:%02d:%02d', 
-                        (julianday('now', 'utc') - julianday(created_at)) * 24,
-                        ((julianday('now', 'utc') - julianday(created_at)) * 1440) % 60,
-                        ((julianday('now', 'utc') - julianday(created_at)) * 86400) % 60
-                    )
-                ELSE '00:00:00'
-            END as training_time
-            FROM job_history 
-            ORDER BY created_at DESC
-        """
-        cursor = conn.execute(query)
-        return [dict(row) for row in cursor.fetchall()]
+async def get_history(request: Request):
+    cache: FrontendCache = request.app.state.frontend_cache
+    data = cache.get('history', default=None)
+    return data if data else {"status": "no history data", "color": "gray", "name": "N/A"}
 
 @app.delete("/history/clear")
-async def clear_history():
-    try:
+async def clear_latest_history():
+    def db_delete():
         with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("DELETE FROM job_history")
-        return {"status": "history cleared"}
-    except Exception as e:
-        logger.error(f"failed to clear history: {e}")
-        return {"error": str(e)}, 500
+            conn.execute("""
+                DELETE FROM job_history 
+                WHERE rowid = (
+                    SELECT rowid FROM job_history 
+                    ORDER BY created_at DESC 
+                    LIMIT 1
+                )
+            """)
+            conn.commit()
+    try:
+        await run_in_threadpool(db_delete)
+        return {"status": "most recent job entry successfully deleted"}
         
+    except Exception as e:
+        logger.error(f"failed to delete latest history: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, 
+            detail=f"failed to alter database log history: {str(e)}"
+        )
+   
 @app.delete("/stop_train")
 async def stop_training():
     try:
         batch_v1 = client.BatchV1Api()
-        jobs = batch_v1.list_namespaced_job(namespace="sagan-app")
+        jobs = batch_v1.list_namespaced_job(namespace=NAMESPACE)
         
         if not jobs.items:
             return {"main.stop_training": "no active jobs to stop."}
@@ -456,7 +509,7 @@ async def stop_training():
         for job in jobs.items:
             batch_v1.delete_namespaced_job(
                 name=job.metadata.name, 
-                namespace="sagan-app",
+                namespace=NAMESPACE,
                 propagation_policy="Foreground" 
             )
             logger.info(f"main.stop_training terminated training job: {job.metadata.name}")
@@ -487,4 +540,112 @@ async def reload_model():
 async def health():
     return {"main.health": "healthy", "mode": "cpu"}  
 
+@app.post("/train")
+async def trigger_training(config: SimpleTrainConfig):
+    skaffold_image_sagan_backend = get_current_image()
+    
+    try:
+        if not app.state.frontend_cache.get('status') == "no training pods found...":
+            raise HTTPException(status_code=400, detail="a trainining job is in process...")
 
+        job_name = f"sagan-train-{uuid.uuid4().hex[:6]}"
+        job = client.V1Job(
+            api_version="batch/v1",
+            kind="Job",
+            metadata=client.V1ObjectMeta(name=job_name),
+            spec=client.V1JobSpec(
+                backoff_limit=0,
+                ttl_seconds_after_finished=30, 
+                active_deadline_seconds=180, 
+                template=client.V1PodTemplateSpec(
+                    metadata=client.V1ObjectMeta(
+                        labels={"job-group": "sagan-train"}
+                    ),
+                    spec=client.V1PodSpec(
+                        service_account_name="sagan-backend-ksa",
+                        restart_policy="Never",
+                        affinity=client.V1Affinity(
+                            pod_affinity=client.V1PodAffinity(
+                                required_during_scheduling_ignored_during_execution=[
+                                    client.V1PodAffinityTerm(
+                                        label_selector=client.V1LabelSelector(
+                                            match_labels={"app": "sagan-backend"} 
+                                        ),
+                                        topology_key="kubernetes.io/hostname"
+                                    )
+                                ]
+                            )
+                        ),
+                        node_selector={"cloud.google.com/gke-nodepool": "spot-backend-pool"},
+                        tolerations=[client.V1Toleration(
+                            key="dedicated", operator="Equal", value="spot", effect="NoSchedule"
+                        )],
+                        containers=[client.V1Container(
+                            name="train-job",
+                            image=skaffold_image_sagan_backend,
+                            image_pull_policy="IfNotPresent",
+                            env=[client.V1EnvVar(name="JOB_NAME", value=job_name)],
+                            command=["/app/.venv/bin/python", "-u", "train_job.py",
+                                     "--batch_size", str(config.batch_size),
+                                     "--epoch", str(config.epoch),
+                                     "--n", str(config.n)],
+                            volume_mounts=[
+                                client.V1VolumeMount(name="sqlite-pvc", mount_path="/app/data")
+                                ],
+                            resources=client.V1ResourceRequirements(
+                                requests={"memory": "3Gi", "cpu": "500m"},
+                                limits={"memory": "5Gi", "cpu": "1000m"}
+                            )
+                        )],
+                        volumes=[
+                            client.V1Volume(
+                                    name="sqlite-pvc",
+                                    persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name="sagan-pvc")
+                            ),  
+                            ]
+                    )
+                )
+            )
+        )
+
+        batch_v1.create_namespaced_job(namespace=NAMESPACE, body=job)
+
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                "INSERT INTO job_history (job_name, batch_size, epoch, n, status, created_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                (job_name, config.batch_size, config.epoch, config.n, "running")
+            )
+
+        logger.info(f"main.trigger_training train job: '{job_name}' launched.")
+        return {"message": "job launched successfully", "job_name": job_name}
+
+    except HTTPException as he:
+        raise he 
+    except Exception as e:
+        logger.error(f"main.trigger_training train job failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/prompt")
+async def handle_text(request: Request, prompt: TextData):
+
+    learner = request.app.state.learner
+    lock = request.app.state.model_lock
+    
+    def locked_predict(text_input: str):
+        with lock:
+            return learner.run_experiment(prompt=text_input)
+    try:
+        response = await run_in_threadpool(locked_predict, prompt.content)
+        logger.info(f"prompt: {prompt.content}\nresponse {response}")
+        # match frontend's expected key "response"
+        return {"response": response} 
+    except Exception as e:
+        full_trace = traceback.format_exc()
+        logger.error(f"main.handle_text failed: {e}\n{full_trace}")
+        raise HTTPException(
+            status_code=500, 
+            detail={"message": str(e), "traceback": full_trace}
+        )
+    
+if __name__ == "__main__":
+    asyncio.run(main())

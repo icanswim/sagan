@@ -16,6 +16,29 @@ streamlit
 
 ## workflow
 
+• ingress ip
+• dns (level 7)
+• gcloud certificate manager
+• gcloud certificate map
+• gcloud service account GCSA / IAM roles
+• kubernetes service account KSA
+• workload identity federation (links GCSA and KSA)
+• artifact registry
+
+• gke control plane
+• network endpoint group NEG (direct to pod networking)
+• gcloud load balancer (level 4)
+• dedicated node pool
+• spot node pool
+• persistent volume claim
+• sqlite3
+• logging
+
+• frontend deployment (streamlit)
+• backend deployment inference (fastapi, pytorch)
+• backend sidecar training job  (fastapi, pytorch)
+
+
 #environment
 
 gcloud auth login
@@ -131,6 +154,7 @@ gcloud storage buckets create gs://${BUCKET_NAME} \
     --uniform-bucket-level-access \
     --enable-hierarchical-namespace
 
+#fuse bucket
 kubectl get daemonset gcs-fuse-csi-driver -n kube-system
 #create lifecycle.json for bucket maintainence
 gcloud storage buckets update gs://${BUCKET_NAME} --lifecycle-file=lifecycle.json
@@ -151,17 +175,7 @@ kubectl annotate serviceaccount sagan-frontend-ksa \
     --namespace sagan-app \
     iam.gke.io/gcp-service-account=sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com
 
-gcloud container node-pools create spot-frontend-pool \
-    --cluster ${CLUSTER} \
-    --spot \
-    --zone us-central1-a \
-    --machine-type e2-medium \
-    --node-taints dedicated=spot:NoSchedule \
-    --service-account=sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com \
-    --num-nodes 1 \
-    --workload-metadata=GKE_METADATA
-
-gcloud container node-pools create spot-backend-pool \
+gcloud container node-pools create spot-shared-pool \
     --cluster ${CLUSTER} \
     --spot \
     --zone us-central1-a \
@@ -170,9 +184,11 @@ gcloud container node-pools create spot-backend-pool \
     --disk-type pd-balanced \
     --node-taints dedicated=spot:NoSchedule \
     --service-account=sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com \
-    --num-nodes 1 \
+    --enable-autoscaling \
+    --min-nodes=1 \
+    --max-nodes=2 \
     --workload-metadata=GKE_METADATA
-
+ 
 gcloud container clusters describe ${CLUSTER} \
     --location ${ZONE} \
     --format="value(config.addonsConfig.gcsFuseCsiDriverConfig.enabled)"
@@ -312,11 +328,11 @@ skaffold dev --force=true --port-forward
 
 #check the logs
 kubectl get pods -n sagan-app
-kubectl exec backend-deployment-75f877f758-5qc77 -n sagan-app -- ls /app/data/
-kubectl exec backend-deployment-587847cb67-mpsws -n sagan-app -- cat /app/data/log-f371e3b0-8ff8-464b-b765-d5a0683e7a4e.txt
+kubectl exec backend-deployment-5948dfb4bb-kpqxd -n sagan-app -- ls /app/data/
+kubectl exec backend-deployment-5948dfb4bb-kpqxd -n sagan-app -- cat /app/data/backend.main_20260505_034604.log
 
-kubectl exec backend-deployment-7c8c4b598c-5qpg7 -n sagan-app -- sh -c 'rm /app/data/*txt'
 
-kubectl exec backend-deployment-75f877f758-5qc77 -n sagan-app -- ls -lh /app/data/tinyshakes.txt
+kubectl exec backend-deployment-5bbc8df66f-zwrjn -n sagan-app -- sh -c 'rm /app/data/*txt'
 
+kubectl exec -it backend-deployment-5bbc8df66f-zwrjn -n sagan-app -c backend -- netstat -tuln
 

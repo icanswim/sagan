@@ -57,12 +57,10 @@ spec:
     metadata:
       labels:
         app: backend
-      annotations:
-        gke-gcsfuse/volumes: "true"
     spec:
       serviceAccountName: sagan-backend-ksa
       nodeSelector:
-        cloud.google.com/gke-nodepool: "spot-backend-pool"
+        cloud.google.com/gke-nodepool: "spot-shared-pool"
         iam.gke.io/gke-metadata-server-enabled: "true"
       tolerations: 
       - key: "dedicated"
@@ -85,21 +83,18 @@ spec:
           "--host", "0.0.0.0", "--port", "8000"]
         resources:
           requests:
-            memory: "1Gi"
-            cpu: "250m"
+            memory: "2Gi"
+            cpu: "750m"
           limits:
             memory: "3Gi"
-            cpu: "500m"
+            cpu: "1000m"
         volumeMounts:
         - mountPath: "/app/data" 
-          name: fuse-volume
+          name: sagan-pvc
       volumes:
-      - name: fuse-volume
-        csi:
-          driver: gcsfuse.csi.storage.gke.io
-          volumeAttributes:
-            bucketName: sagan-bucket
-            mountOptions: "uid=1000,gid=1000,file-mode=775,dir-mode=775"
+      - name: sagan-pvc
+        persistentVolumeClaim:
+          claimName: sagan-pvc
 ---
 # Backend Service
 apiVersion: v1
@@ -141,7 +136,7 @@ spec:
     spec:
       serviceAccountName: sagan-frontend-ksa
       nodeSelector:
-        cloud.google.com/gke-nodepool: "spot-frontend-pool"
+        cloud.google.com/gke-nodepool: "spot-shared-pool"
         iam.gke.io/gke-metadata-server-enabled: "true"
       tolerations:
       - key: "dedicated"
@@ -182,7 +177,7 @@ metadata:
   name: frontend-service
   namespace: sagan-app
 spec:
-  type: LoadBalancer # Gives you a public IP in GKE
+  type: LoadBalancer # used with public static ip
   selector:
     app: frontend
   ports:

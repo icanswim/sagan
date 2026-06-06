@@ -13,7 +13,7 @@ from gpt.dataset import TinyShakes
 from cosmosis.learning import Learn, Metric, Selector
 from cosmosis.model import GPT
 
-logger = Metric.setup_logging(log_name='backend.train-job', log_dir='/app/data')
+logger = Metric.setup_logging(log_name='backend.train-job')
 
 def run_training(d_model=384, d_vec=384, d_seq=25, d_gen=25, d_vocab=50304, 
                  n_head=6, num_layers=6, batch_size=64, epoch=1, n=1000):
@@ -109,7 +109,7 @@ if __name__ == "__main__":
     
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--epoch", type=int, default=1)
-    parser.add_argument("--n", type=int, default=5000)
+    parser.add_argument("--n", type=int, default=2000)
     
     args = parser.parse_args()
 
