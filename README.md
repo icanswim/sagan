@@ -44,6 +44,14 @@ streamlit
 gcloud auth login
 gcloud components install skaffold
 
+#create .env local private file to hold secrets
+    PROJECT_ID=
+    REGION=
+    ZONE_LETTER=
+    IMAGE_REPO_NAME=
+    CLUSTER_NAME=
+    BUCKET_NAME=
+
 #create setup.sh
     #load the private values from .env
     export $(grep -v '^#' .env | xargs)
@@ -278,7 +286,7 @@ kubectl get svc frontend-service -o jsonpath='{.metadata.annotations["cloud\.goo
 #environment
 source setup.sh
 
-#pipe BUCKET_NAME and any other variables from skaffold.yaml to skaffold run (since skaffold.yaml can not transmit variables to googleCloudBuild)
+#pipe BUCKET_NAME and any private variables from skaffold.yaml to skaffold and run 
 envsubst < skaffold.yaml | skaffold run -p gke -f -
 
 gcloud compute networks subnets list --filter="purpose=REGIONAL_MANAGED_PROXY AND region:us-central1"

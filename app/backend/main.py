@@ -252,7 +252,6 @@ def get_container_log(pod_name, container_name):
         return f"system error loading log history: {e}"
 
 def loop():
-
     out = {
         "status": "",
         "color": "green" 
@@ -261,7 +260,7 @@ def loop():
     sorted_pods = get_pods()
     if not sorted_pods:
         out['status'] = "no training pods found..."
-        out['color'] = "yellow"
+        out['color'] = "green"
         return out
     
     for pod in sorted_pods:
@@ -301,7 +300,7 @@ def loop():
                                     out['status'] += f"⚠️ Container is STUCK during setup: {state.waiting.reason}\n"
                                     out['color'] = "red" 
                                 elif out['color'] not in ["red", "blue"]:
-                                    out['color'] = "yellow"
+                                    out['color'] = "green"
                             
                             elif state.running:
                                 out['status'] += f"Status{pod_suffix}: Running 🏃\n"
@@ -330,7 +329,7 @@ def loop():
 
     if not out['status'].strip():
         out['status'] = "no training pods found..."
-        out['color'] = "yellow"
+        out['color'] = "green"
 
     return out
 
@@ -458,7 +457,6 @@ async def get_log(request: Request):
 @app.get("/job_status")
 async def get_job_status(request: Request):
     cache: FrontendCache = request.app.state.frontend_cache
-    
     status = cache.get('status', default="no job status data")
     color = cache.get('color', default="gray")
     
@@ -471,7 +469,7 @@ async def get_job_status(request: Request):
 async def get_history(request: Request):
     cache: FrontendCache = request.app.state.frontend_cache
     data = cache.get('history', default=None)
-    return data if data else {"status": "no history data", "color": "gray", "name": "N/A"}
+    return data if data else {"status": "no history data", "color": "gray"}
 
 @app.delete("/history/clear")
 async def clear_latest_history():

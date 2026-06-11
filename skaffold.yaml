@@ -48,8 +48,8 @@ profiles:
   - name: gke
     build:
       googleCloudBuild:
-        projectId: "${PROJECT_ID}"
-        bucket: "${BUCKET_NAME}" 
+        projectId: "{{.PROJECT_ID}}"   
+        bucket: "{{.BUCKET_NAME}}"      
       artifacts:
         - image: sagan-backend
           context: app/backend
