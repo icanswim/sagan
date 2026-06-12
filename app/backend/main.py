@@ -132,7 +132,7 @@ class DatabaseManager:
             conn.execute(query, query_values)
             conn.commit()
 
-    def get_job_history(self, limit: int = None) -> list[dict]:
+    def get_db_history(self, limit: int = None) -> list[dict]:
         with self._get_connection(parse_types=False) as conn:
             conn.row_factory = sqlite3.Row
             
@@ -165,17 +165,27 @@ class DatabaseManager:
             cursor = conn.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
         
-    def get_running_jobs(self) -> list[str]:
+    def get_db_running_jobs(self) -> list[dict]:
+
         with self._get_connection(parse_types=False) as conn:
             conn.row_factory = sqlite3.Row
-            return [row['job_name'] for row in conn.execute(
-                "SELECT job_name FROM job_history WHERE status = 'running'"
-            ).fetchall()]
+            
+            # (julianday('now') - julianday(created_at)) * 86400 calculates age in seconds
+            query = """
+                SELECT job_name,
+                       CAST((julianday('now') - julianday(created_at)) * 86400 AS INT) as training_time
+                FROM job_history 
+                WHERE status = 'running'
+            """
+            
+            cursor = conn.execute(query)
+            return [dict(row) for row in cursor.fetchall()]
         
-    def rectify(self, zombies: list[str]) -> None:
+    def rectify(self, zombies: list[dict]) -> None:
         if not zombies:
             return
-
+        
+        zombies[:] = [job for job in zombies if job.get('training_time', 0) > 60]
         timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
         update_data = [(timestamp, name) for name in zombies]
         
@@ -212,7 +222,7 @@ def get_jobs():
     job_items = getattr(jobs, 'items', []) or []
 
     if not job_items:
-        return {"status": "no jobs found", "color": "gray"}
+        return {"status": jobs, "color": "gray"}
 
     sorted_jobs = sorted(job_items, key=lambda x: getattr(x.metadata, 'creation_timestamp', None) or "")
     return sorted_jobs 
@@ -254,7 +264,8 @@ def get_container_log(pod_name, container_name):
 def loop():
     out = {
         "status": "",
-        "color": "green" 
+        "color": "green",
+        "history": ['no history data']
     }
     
     sorted_pods = get_pods()
@@ -314,7 +325,7 @@ def loop():
                                     out['color'] = "red"
                                 elif state.terminated.exit_code == 0:
                                     out['status'] += "✅ Container completed successfully.\n"
-                                    # Don't downgrade from red or blue
+                                    # don't downgrade from red or blue
                                     if out['color'] not in ["red", "blue"]:
                                         out['color'] = "green"
                                 else:
@@ -343,11 +354,11 @@ async def monitor_loop(frontend_cache: FrontendCache, db_manager: DatabaseManage
             output = await run_in_threadpool(loop)
             
             if output['status'] == "no training pods found...":
-                db_manager.rectify(db_manager.get_running_jobs())
-                output['history'] = db_manager.get_job_history(limit=10)
+                db_manager.rectify(db_manager.get_db_running_jobs())
+                output['history'] = db_manager.get_db_history(limit=10)
                 
             frontend_cache.set(output)
-            interval = 30 if output['status'] == "no training pods found..." else 2
+            interval = 10 if output['status'] == "no training pods found..." else 2
             await asyncio.sleep(interval)
                 
         except asyncio.CancelledError:
@@ -452,12 +463,12 @@ async def get_log(request: Request):
     log_keys = [key for key in cache.cache.keys() if 'log' in key]
     for k in log_keys:
         data[k] = cache.get(k)
-    return data if data else {"status": "no log data", "color": "gray", "name": "N/A"}
+    return data if data else {"backend": "no log data", "color": "gray", "name": "N/A"}
 
 @app.get("/job_status")
 async def get_job_status(request: Request):
     cache: FrontendCache = request.app.state.frontend_cache
-    status = cache.get('status', default="no job status data")
+    status = cache.get('status', default="no training pods found...")
     color = cache.get('color', default="gray")
     
     return {
@@ -469,7 +480,7 @@ async def get_job_status(request: Request):
 async def get_history(request: Request):
     cache: FrontendCache = request.app.state.frontend_cache
     data = cache.get('history', default=None)
-    return data if data else {"status": "no history data", "color": "gray"}
+    return data if data else {"status": "no training pods found...", "color": "gray", "history": []}
 
 @app.delete("/history/clear")
 async def clear_latest_history():
@@ -486,7 +497,7 @@ async def clear_latest_history():
             conn.commit()
     try:
         await run_in_threadpool(db_delete)
-        return {"status": "most recent job entry successfully deleted"}
+        return {"status": "most recent job entry successfully deleted", "color": "green"}
         
     except Exception as e:
         logger.error(f"failed to delete latest history: {e}", exc_info=True)
@@ -502,7 +513,7 @@ async def stop_training():
         jobs = batch_v1.list_namespaced_job(namespace=NAMESPACE)
         
         if not jobs.items:
-            return {"main.stop_training": "no active jobs to stop."}
+            return {"main.stop_training": "no active jobs to stop.", "color": "green"}
 
         for job in jobs.items:
             batch_v1.delete_namespaced_job(
@@ -519,7 +530,7 @@ async def stop_training():
                     WHERE job_name = ?
                 """, ("cancelled", job.metadata.name))
 
-        return {"main.stop_training": f"stopped {len(jobs.items)} training job(s)."}
+        return {"main.stop_training": f"stopped {len(jobs.items)} training job(s).", "color": "green"}
     except Exception as e:
         logger.error(f"main.stop_training failed to stop jobs: {e}")
         raise HTTPException(status_code=500, detail=str(e))  
@@ -591,7 +602,7 @@ async def trigger_training(config: SimpleTrainConfig):
                                 client.V1VolumeMount(name="sqlite-pvc", mount_path="/app/data")
                                 ],
                             resources=client.V1ResourceRequirements(
-                                requests={"memory": "3Gi", "cpu": "500m"},
+                                requests={"memory": "3Gi", "cpu": "250m"},
                                 limits={"memory": "5Gi", "cpu": "1000m"}
                             )
                         )],

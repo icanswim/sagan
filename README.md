@@ -44,7 +44,7 @@ streamlit
 gcloud auth login
 gcloud components install skaffold
 
-#create .env local private file to hold secrets
+#create .env local file to hold private values
     PROJECT_ID=
     REGION=
     ZONE_LETTER=

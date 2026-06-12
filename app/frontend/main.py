@@ -124,41 +124,31 @@ with t3:
 st.markdown('<div class="footer-container"></div>', unsafe_allow_html=True)
 st.subheader("📝 training monitor")
 
-stream_enabled = st.toggle("live stream", value=True)
-
 @st.fragment(run_every="5s")
-def sync_footer_fragment(enabled):
-    # use a local dict for the current render to avoid double-printing
-    current_log = {}
+def sync_footer_fragment():
+    if "local_logs" not in st.session_state:
+        st.session_state.local_logs = {}
 
     with st.container():
         try:
-            # fetch job status
             res = requests.get(f"{BACKEND_URL}/job_status", timeout=10)
             if res.status_code == 200:
                 job = res.json()
-                st.markdown(f"**Job:** `{job.get('name', 'N/A')}` | **Status:** :{job.get('color', 'grey')}[{job.get('status', 'Unknown')}]")
+                st.markdown(f"**Job:** `{job.get('job_name', 'N/A')}` | **Status:** :{job.get('color', 'grey')}[{job.get('status', 'Unknown')}]")
             
-            # fetch logs, set local variable
-            if enabled:
-                log_res = requests.get(f"{BACKEND_URL}/get_log", timeout=5)
-                if log_res.status_code == 200:
-                    current_log = log_res.json()
-                    # sync to session state for persistence across tab changes
-                    st.session_state.local_logs = current_log
+            log_res = requests.get(f"{BACKEND_URL}/get_log", timeout=5)
+            if log_res.status_code == 200:
+                st.session_state.local_logs = log_res.json()
+            else:
+                pass
 
-            # render only from the local variable
-            display_logs = current_log if current_log else st.session_state.get("local_logs", {})
-            
-            if display_logs:
-                # sort keys so windows stay in the same order
-                for filename in sorted(display_logs.keys()):
-                    content = display_logs[filename]
+            if st.session_state.local_logs:
+                for filename in sorted(st.session_state.local_logs.keys()):
+                    content = st.session_state.local_logs[filename]
                     
                     if "train_job" in filename:
                         st.caption(f"🔥 training cluster live: {filename}")
                         st.code(content, language="text")
-                    
                     elif "backend" in filename:
                         st.caption(f"🖥️ backend activity: {filename}")
                         st.code(content, language="text")
@@ -168,5 +158,5 @@ def sync_footer_fragment(enabled):
         except Exception as e:
             st.error(f"fragment error: {str(e)}")
 
-sync_footer_fragment(stream_enabled)
+sync_footer_fragment()
 
