@@ -57,6 +57,7 @@ spec:
     metadata:
       labels:
         app: backend
+        app.kubernetes.io/name: backend
     spec:
       serviceAccountName: sagan-backend-ksa
       nodeSelector:
@@ -86,11 +87,15 @@ spec:
             memory: "2Gi"
             cpu: "500m"
           limits:
-            memory: "3Gi"
+            memory: "4Gi"
             cpu: "1000m"
         volumeMounts:
+        - mountPath: "/app/db"
+          name: sagan-pvc
+          subPath: db_dir
         - mountPath: "/app/data" 
           name: sagan-pvc
+          subPath: data_dir
       volumes:
       - name: sagan-pvc
         persistentVolumeClaim:
@@ -133,16 +138,11 @@ spec:
     metadata:
       labels:
         app: frontend
+        app.kubernetes.io/name: frontend
     spec:
       serviceAccountName: sagan-frontend-ksa
       nodeSelector:
-        cloud.google.com/gke-nodepool: "spot-shared-pool"
-        iam.gke.io/gke-metadata-server-enabled: "true"
-      tolerations:
-      - key: "dedicated"
-        operator: "Equal"
-        value: "spot"
-        effect: "NoSchedule"
+        cloud.google.com/gke-nodepool: "dedicated-pool"
       containers:
       - name: frontend
         image: sagan-frontend # skaffold replaces this
@@ -159,10 +159,10 @@ spec:
         ]
         resources:
           requests:
-            memory: "1Gi"
-            cpu: "250m"
-          limits:
             memory: "2Gi"
+            cpu: "500m"
+          limits:
+            memory: "3Gi"
             cpu: "1000m"
         env:
         - name: BACKEND_URL

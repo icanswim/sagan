@@ -4,10 +4,13 @@ import os
 
 
 st.set_page_config(page_title="Sagan Dashboard", layout="wide")
+
 if "local_logs" not in st.session_state:
     st.session_state.local_logs = {}
+
 BACKEND_URL = os.getenv("BACKEND_URL", "http://backend-service:8000")
 
+# Styles
 st.markdown("""
     <style>
         .stCodeBlock { font-size: 0.75rem !important; height: 350px !important; }
@@ -20,6 +23,7 @@ st.caption("A utility for serving data science applications.")
 
 t1, t2, t3 = st.tabs(["💬 inference", "🛠️ training control", "📜 history"])
 
+# inference
 with t1:
     prompt = st.text_area("Ask Shakespeare...", placeholder="To be or not to be...", height=150)
     if st.button("Generate", type="primary"):
@@ -29,40 +33,26 @@ with t1:
                 st.write(res.json().get("response"))
             except Exception as e:
                 st.error(f"Inference failed: {e}")
-
+# training control
 with t2:
     st.subheader("⚙️ google kubernetes engine training control")
     st.caption("Adjust hyperparameters for the Shakespeare GPT model.")
 
     with st.form("training_params"):
-        batch_size = st.number_input(
-            "batch size", value=64, min_value=8, max_value=168, step=8, 
-            help="8 <= bs <= 168")
-        epoch = st.number_input(
-            "epochs", value=1, min_value=1, max_value=10, step=1, 
-            help="1 <= epochs <= 10")
-        n_samples = st.number_input(
-            "samples (n)", value=2000, min_value=1000, max_value=300000, step=1000, 
-            help="1000 <= n <= 300k")
+        batch_size = st.number_input("batch size", value=64, min_value=8, max_value=168, step=8, help="8 <= bs <= 168")
+        epoch = st.number_input("epochs", value=1, min_value=1, max_value=10, step=1, help="1 <= epochs <= 10")
+        n_samples = st.number_input("samples (n)", value=2000, min_value=1000, max_value=300000, step=1000, help="1000 <= n <= 300k")
 
         submitted = st.form_submit_button("🔥 start training", type="primary", use_container_width=True)
-        
         if submitted:
-            payload = {
-                "batch_size": batch_size, 
-                "epoch": epoch, 
-                "n": n_samples
-            }
+            payload = {"batch_size": batch_size, "epoch": epoch, "n": n_samples}
             try:
                 res = requests.post(f"{BACKEND_URL}/train", json=payload, timeout=10)
                 if res.status_code == 200:
                     st.success("Training job submitted!")
                 else:
-                    try:
-                        error_detail = res.json().get("detail", "Unknown error")
-                        st.error(f"❌ {error_detail}")
-                    except:
-                        st.error(f"Backend error: {res.status_code}")
+                    error_detail = res.json().get("detail", "Unknown error") if res.headers.get("content-type") == "application/json" else f"Backend error: {res.status_code}"
+                    st.error(f"❌ {error_detail}")
             except Exception as e:
                 st.error(f"Failed to connect to backend: {e}")
 
@@ -81,7 +71,7 @@ with t2:
                 st.toast(res.json().get("status", "syncing..."))
             except:
                 st.error("sync failed.")
-
+# history
 with t3:
     st.subheader("📜 past training runs")
 
@@ -99,7 +89,7 @@ with t3:
         try:
             res = requests.get(f"{BACKEND_URL}/history", timeout=5)
             if res.status_code == 200:
-                data = res.json() 
+                data = res.json()
                 if data:
                     st.dataframe(
                         data, 
@@ -120,43 +110,54 @@ with t3:
             st.error(f"could not load history: {e}")
 
     refresh_history()
-# training monitor
+
 st.markdown('<div class="footer-container"></div>', unsafe_allow_html=True)
 st.subheader("📝 training monitor")
 
 @st.fragment(run_every="5s")
 def sync_footer_fragment():
-    if "local_logs" not in st.session_state:
-        st.session_state.local_logs = {}
+    try:
+        res = requests.get(f"{BACKEND_URL}/job_status", timeout=10)
+        if res.status_code == 200:
+            job = res.json()
+            color = job.get('color', 'gray').lower()
+            job_name = job.get('job_name', 'n/a')
+            status = job.get('status', 'Unknown')
 
-    with st.container():
-        try:
-            res = requests.get(f"{BACKEND_URL}/job_status", timeout=10)
-            if res.status_code == 200:
-                job = res.json()
-                st.markdown(f"**Job:** `{job.get('job_name', 'N/A')}` | **Status:** :{job.get('color', 'grey')}[{job.get('status', 'Unknown')}]")
+            color_emojis = {
+                "green": "🟢",
+                "blue": "🔵", 
+                "yellow": "🟡",
+                "orange": "🟠",
+                "red": "🔴"
+            }
+            dot = color_emojis.get(color, "⚪")
+            st.markdown(f"**Job:** `{job_name}` | **Status:** {dot} {status}")
+        else:
+            st.warning(f"⚠️ Status backend returned code: {res.status_code}")
+        
+        log_res = requests.get(f"{BACKEND_URL}/get_log", timeout=5)
+        if log_res.status_code == 200:
+            st.session_state.local_logs = log_res.json()
+
+        if st.session_state.local_logs and isinstance(st.session_state.local_logs, dict):
+            st.subheader("📋 Streaming Logs")
             
-            log_res = requests.get(f"{BACKEND_URL}/get_log", timeout=5)
-            if log_res.status_code == 200:
-                st.session_state.local_logs = log_res.json()
-            else:
-                pass
+            for filename, content in sorted(st.session_state.local_logs.items()):
+                if "train" in filename:
+                    st.caption(f"🔥 training cluster live: {filename}")
+                    st.code(content, language="text")
+                elif "backend" in filename:
+                    st.caption(f"🖥️ backend activity: {filename}")
+                    st.code(content, language="text")
+        else:
+            st.info("Waiting for logs from backend...")
 
-            if st.session_state.local_logs:
-                for filename in sorted(st.session_state.local_logs.keys()):
-                    content = st.session_state.local_logs[filename]
-                    
-                    if "train_job" in filename:
-                        st.caption(f"🔥 training cluster live: {filename}")
-                        st.code(content, language="text")
-                    elif "backend" in filename:
-                        st.caption(f"🖥️ backend activity: {filename}")
-                        st.code(content, language="text")
-            else:
-                st.info("waiting for logs from backend...")
+    except requests.exceptions.RequestException as e:
+        st.error(f"📡 Backend Connection Failed: {e}")
+    except Exception as e:
+        st.error(f"❌ Fragment system error: {str(e)}")
 
-        except Exception as e:
-            st.error(f"fragment error: {str(e)}")
 
 sync_footer_fragment()
 

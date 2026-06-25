@@ -5,6 +5,7 @@ description = "pytorch cpu only"
 readme = "README.md"
 requires-python = ">=3.11,<3.14" 
 dependencies = [
+    "aiosqlite>=0.22.1",
     "annotated-doc==0.0.4",
     "annotated-types==0.6.0",
     "anyio==4.10.0",

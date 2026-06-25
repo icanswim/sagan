@@ -1,7 +1,7 @@
 import os
 import argparse
 import traceback
-import sqlite3
+import requests
 
 from torch import long
 from torch.optim import Adam
@@ -85,36 +85,40 @@ def run_training(d_model=384, d_vec=384, d_seq=25, d_gen=25, d_vocab=50304,
     
     try:
         out = learner.run_experiment()
-        logger.info("train-job complete... {}".format(out))
         test_loss = out.get('test_loss') if isinstance(out, dict) else None
-        update_db("succeeded", test_loss)
+        logger.info("train-job complete... \n{}".format(out))
+        send_callback("completed", test_loss)
+
     except Exception as e:
         full_trace = traceback.format_exc()
         logger.error(f"backend.train-job failed: {e}\n{full_trace}")
-        update_db("failed", None)
+        send_callback("failed", None)
         raise RuntimeError(f"training failed: {e}") 
     
-def update_db(status, test_loss):
-    job_name = os.environ.get("JOB_NAME") # matches env var
-    with sqlite3.connect("/app/data/training_history.db") as conn:
-        conn.execute(
-            """UPDATE job_history 
-               SET status = ?, test_loss = ?, finished_at = CURRENT_TIMESTAMP 
-               WHERE job_name = ?""", 
-            (status, test_loss, job_name)
-        )
+def send_callback(status: str, test_loss: float or None):
+    job_name = os.environ.get("JOB_NAME")
+
+    backend_base_url = os.getenv("BACKEND_URL", "http://backend-service:8000")
+    backend_url = f"{backend_base_url.rstrip('/')}/jobs/{job_name}/callback"
+    
+    payload = {
+        "status": status,
+        "test_loss": test_loss
+    }
+    
+    try:
+        response = requests.post(backend_url, json=payload, timeout=5)
+        response.raise_for_status()
+        logger.info(f"Callback sent successfully to {backend_url}")
+    except Exception as e:
+        logger.error(f"Failed sending structural payload back to core API: {e}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="run sagan train job")
-    
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--epoch", type=int, default=1)
     parser.add_argument("--n", type=int, default=2000)
-    
     args = parser.parse_args()
 
-    run_training(
-        batch_size=args.batch_size,
-        epoch=args.epoch,
-        n=args.n
-    )
+    run_training(batch_size=args.batch_size, epoch=args.epoch, n=args.n)
