@@ -109,9 +109,9 @@ def send_callback(status: str, test_loss: float or None):
     try:
         response = requests.post(backend_url, json=payload, timeout=5)
         response.raise_for_status()
-        logger.info(f"Callback sent successfully to {backend_url}")
+        logger.info(f"callback sent successfully to {backend_url}")
     except Exception as e:
-        logger.error(f"Failed sending structural payload back to core API: {e}")
+        logger.error(f"failed sending structural payload back to core api: {e}")
 
 
 if __name__ == "__main__":

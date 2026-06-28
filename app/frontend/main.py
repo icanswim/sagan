@@ -1,7 +1,6 @@
+import os
 import requests
 import streamlit as st
-import os
-
 
 st.set_page_config(page_title="Sagan Dashboard", layout="wide")
 
@@ -23,17 +22,18 @@ st.caption("A utility for serving data science applications.")
 
 t1, t2, t3 = st.tabs(["💬 inference", "🛠️ training control", "📜 history"])
 
-# inference
 with t1:
     prompt = st.text_area("Ask Shakespeare...", placeholder="To be or not to be...", height=150)
     if st.button("Generate", type="primary"):
         with st.spinner("Thinking..."):
             try:
                 res = requests.post(f"{BACKEND_URL}/prompt", json={"content": prompt}, timeout=120)
-                st.write(res.json().get("response"))
+                if res.status_code == 200:
+                    st.write(res.json().get("response"))
+                else:
+                    st.error(f"Inference error: {res.status_code}")
             except Exception as e:
                 st.error(f"Inference failed: {e}")
-# training control
 with t2:
     st.subheader("⚙️ google kubernetes engine training control")
     st.caption("Adjust hyperparameters for the Shakespeare GPT model.")
@@ -55,23 +55,21 @@ with t2:
                     st.error(f"❌ {error_detail}")
             except Exception as e:
                 st.error(f"Failed to connect to backend: {e}")
-
     sc1, sc2 = st.columns(2)
     with sc1:
         if st.button("🛑 stop training", use_container_width=True, type="secondary"):
             try:
-                requests.delete(f"{BACKEND_URL}/stop_train")
+                requests.delete(f"{BACKEND_URL}/stop_train", timeout=5)
                 st.info("stop signal sent...")
             except:
                 st.error("could not reach backend...")
     with sc2:
         if st.button("🔄 sync weights", use_container_width=True):
             try:
-                res = requests.post(f"{BACKEND_URL}/reload_model")
+                res = requests.post(f"{BACKEND_URL}/reload_model", timeout=5)
                 st.toast(res.json().get("status", "syncing..."))
             except:
                 st.error("sync failed.")
-# history
 with t3:
     st.subheader("📜 past training runs")
 
@@ -81,15 +79,17 @@ with t3:
             try:
                 res = requests.delete(f"{BACKEND_URL}/history/clear", timeout=5)
                 if res.status_code == 200:
-                    st.toast("most recent job deleted...")
+                    st.toast("most recent job deleted...", icon="🗑️")
+                    st.rerun()  # Instantly updates table visualization
                 else:
                     st.error(f"failed to delete latest job: {res.status_code}")
             except Exception as e:
                 st.error(f"request failed: {e}")
+                
         try:
             res = requests.get(f"{BACKEND_URL}/history", timeout=5)
             if res.status_code == 200:
-                data = res.json()
+                data = res.json()  
                 if data:
                     st.dataframe(
                         data, 
@@ -103,7 +103,7 @@ with t3:
                         }
                     )
                 else:
-                    st.info("no training history found.")
+                    st.info("backend returns no training history...")
             else:
                 st.error(f"backend error: {res.status_code}")
         except Exception as e:
@@ -121,8 +121,8 @@ def sync_footer_fragment():
         if res.status_code == 200:
             job = res.json()
             color = job.get('color', 'gray').lower()
-            job_name = job.get('job_name', 'n/a')
-            status = job.get('status', 'Unknown')
+            job_name = job.get('job_name', 'no info')
+            status = job.get('status', 'no info')
 
             color_emojis = {
                 "green": "🟢",
@@ -158,6 +158,6 @@ def sync_footer_fragment():
     except Exception as e:
         st.error(f"❌ Fragment system error: {str(e)}")
 
-
 sync_footer_fragment()
+
 

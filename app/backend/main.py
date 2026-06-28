@@ -1,5 +1,5 @@
-import os, uuid, traceback, sqlite3
-import asyncio, threading, copy
+import os, uuid, traceback
+import asyncio, copy, time
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
@@ -24,6 +24,11 @@ from cosmosis.dataset import AsTensor
 
 DB_PATH = "/app/db/job_history.db"
 NAMESPACE = "sagan-app"
+DEFAULT_CACHE = {"status": "",
+                 "color": "grey",  
+                 "history": {"status": "no data"},
+                 "job_name": "no data",
+                 "log": "no data"}
 
 logger = Metric.setup_logging(log_name='backend.main')
 
@@ -40,24 +45,23 @@ batch_v1 = client.BatchV1Api()
 core_v1 = client.CoreV1Api()
 
 class FrontendCache:
-
     def __init__(self):
-        self.cache = {}
-        self.lock = threading.Lock()
+        self.cache = copy.deepcopy(DEFAULT_CACHE)
+        self.lock = asyncio.Lock()
 
-    def set(self, key_or_dict, value=None):
-        with self.lock:
+    async def set(self, key_or_dict, value=None):
+        async with self.lock:
             if isinstance(key_or_dict, dict):
                 self.cache.update(key_or_dict)
             else:
                 self.cache[key_or_dict] = value
 
-    def get(self, key, default=None):
-        with self.lock:
+    async def get(self, key, default=None):
+        async with self.lock:
             return self.cache.get(key, default)
 
-    def get_all(self):
-        with self.lock:
+    async def get_all(self):
+        async with self.lock:
             return copy.deepcopy(self.cache)
 
 
@@ -90,30 +94,24 @@ class DatabaseManager:
 
     def __init__(self, db_path: str):
         self.db_path = db_path
-        self._init_db()
 
-    def _get_connection(self, parse_types: bool = True) -> sqlite3.Connection:
-        # parse_types true for python datetime objects, false for raw strings
-        detect = sqlite3.PARSE_DECLTYPES if parse_types else 0
-        conn = sqlite3.connect(self.db_path, detect_types=detect)
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        return conn
-
-    def _init_db(self) -> None:
+    async def _init_db(self) -> None:
         dynamic_schema = ", ".join([f"{col} {datatype}" for col, datatype in self.ALLOWED_COLUMNS.items()])
         
-        with self._get_connection() as conn:
+        async with aiosqlite.connect(self.db_path) as conn:
+            await conn.execute("PRAGMA journal_mode=WAL;")
+            await conn.execute("PRAGMA synchronous=NORMAL;")
+            
             query = f"""
                 CREATE TABLE IF NOT EXISTS job_history (
                     job_name TEXT PRIMARY KEY,
                     {dynamic_schema}
                 )
             """
-            conn.execute(query)
-            conn.commit()
+            await conn.execute(query)
+            await conn.commit()
 
-    def update(self, job_name: str, metric_update: dict) -> None:
+    async def update(self, job_name: str, metric_update: dict) -> None:
         filtered_updates = {
             k: v for k, v in metric_update.items() 
             if k in self.ALLOWED_COLUMNS and k != "created_at"
@@ -127,20 +125,20 @@ class DatabaseManager:
         set_clause = ", ".join([f"{col} = excluded.{col}" for col in filtered_updates.keys()])
         query_values = (job_name,) + tuple(filtered_updates.values())
 
-        with self._get_connection() as conn:
+        async with aiosqlite.connect(self.db_path) as conn:
             query = f"""
                 INSERT INTO job_history ({", ".join(columns)})
                 VALUES ({placeholders})
                 ON CONFLICT(job_name) DO UPDATE SET
                 {set_clause}
             """
-            conn.execute(query, query_values)
-            conn.commit()
+            await conn.execute(query, query_values)
+            await conn.commit()
 
-    def get_db_history(self, limit: int = None) -> list[dict]:
-        with self._get_connection(parse_types=False) as conn:
-            conn.row_factory = sqlite3.Row
-            
+    async def get_db_history(self, limit: int = None) -> list[dict]:
+        async with aiosqlite.connect(self.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+
             query = """
                 SELECT *, 
                 CASE 
@@ -167,15 +165,14 @@ class DatabaseManager:
                 query += " LIMIT ?"
                 params.append(limit)
                 
-            cursor = conn.execute(query, params)
-            return [dict(row) for row in cursor.fetchall()]
+            async with conn.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
         
-    def get_db_running_jobs(self) -> list[dict]:
-
-        with self._get_connection(parse_types=False) as conn:
-            conn.row_factory = sqlite3.Row
+    async def get_db_running_jobs(self) -> list[dict]:
+        async with aiosqlite.connect(self.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
             
-            # (julianday('now') - julianday(created_at)) * 86400 calculates age in seconds
             query = """
                 SELECT job_name,
                        CAST((julianday('now') - julianday(created_at)) * 86400 AS INT) as training_time
@@ -183,10 +180,11 @@ class DatabaseManager:
                 WHERE status = 'running'
             """
             
-            cursor = conn.execute(query)
-            return [dict(row) for row in cursor.fetchall()]
+            async with conn.execute(query) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
         
-    def rectify(self, zombies: list[dict]) -> None:
+    async def rectify(self, zombies: list[dict]) -> None:
         if not zombies:
             return
         
@@ -194,20 +192,19 @@ class DatabaseManager:
         if not filtered_zombies:
             return
         
-        timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-
+        timestamp = datetime.now(timezone.utc).isoformat()
         update_data = [(timestamp, job.get('job_name')) for job in filtered_zombies if job.get('job_name')]
         
-        for name in zombies:
-            logger.warning(f"silent failure detected: {name}")
+        for job in filtered_zombies:
+            logger.warning(f"silent failure detected: {job.get('job_name')}")
             
-        with self._get_connection(parse_types=False) as conn:
-            conn.executemany("""
+        async with aiosqlite.connect(self.db_path) as conn:
+            await conn.executemany("""
                 UPDATE job_history 
                 SET status = 'silent failure', finished_at = ? 
                 WHERE job_name = ?
             """, update_data)
-            conn.commit()
+            await conn.commit()
 
 
 def get_current_image():
@@ -255,18 +252,20 @@ def get_container_log(pod_name, container_name):
             namespace=NAMESPACE, 
             container=container_name,
             tail_lines=20,
-            _request_timeout=3, # Reduced slightly to prevent hard blocking threadpools
+            _request_timeout=3, 
         )
     except ApiException as e:
         return f"unable to fetch logs from kubernetes api: {e.reason}"
     except Exception as e:
         return f"system error loading log history: {e}"
 
-def loop(current_cache: dict=None):
-    new_cache = {"status": "",
-                 "color": "green",  
-                 "history": {"status": "no history data found..."},
-                 "job_name": "n/a"}
+def loop(old_cache: dict=None):
+    old_cache = old_cache or DEFAULT_CACHE.copy()
+    new_cache = DEFAULT_CACHE.copy()
+
+    if old_cache['color'] == 'yellow':
+        time.sleep(5)
+    
     status_lines = []
     condition = "green"  
     train_job = False  
@@ -281,19 +280,19 @@ def loop(current_cache: dict=None):
         for container_name in get_container_names(p):
             if container_name in ["train-job", "backend"]:
                 log = get_container_log(pod_name, container_name)
-                new_cache[f'{pod_name}-{container_name}-log'] = (
+                new_cache[f'{pod_name}-log'] = (
                     f"--- pod: {pod_name}, container: {container_name} ---\n{log}\n"
                 )
 
         if pod_app == "train-job":
             train_job = True
-            new_cache['job_name'] = pod_labels.get("job-name", pod_name)
+            new_cache['job_name'] = pod_labels.get('job_name', 'unknown')
 
         if pod_app == "backend" or not p.status:
             continue
 
         if p.status.phase == "Failed" and p.status.reason == "Evicted":
-            status_lines.append("📉 Node capacity exceeded (Pod Evicted).")
+            status_lines.append("📉 node capacity exceeded (pod evicted).")
             condition = "yellow" if condition != "red" else "red"
             continue
 
@@ -302,8 +301,8 @@ def loop(current_cache: dict=None):
                 continue
 
             if cs.state.waiting:
-                reason = cs.state.waiting.reason or 'Unknown'
-                status_lines.append(f"Waiting (Reason: {reason})")
+                reason = cs.state.waiting.reason or 'unknown'
+                status_lines.append(f"waiting (Reason: {reason})")
                 if reason in ["ImagePullBackOff", "ErrImagePull", "CreateContainerConfigError"]:
                     status_lines.append(f"⚠️ Stuck setup: {reason}")
                     condition = "red"
@@ -311,7 +310,15 @@ def loop(current_cache: dict=None):
                     condition = "yellow"
 
             elif cs.state.running:
-                status_lines.append("Running 🏃")
+                current_status = old_cache.get('status', '').strip()
+                
+                if current_status == 'running...🏃':
+                    status_lines.append('running.🏃...')  
+                elif current_status == 'running.🏃...':
+                    status_lines.append('running..🏃.')    
+                else:
+                    status_lines.append('running...🏃')   
+                    
                 if condition != "red":
                     condition = "blue"
 
@@ -320,21 +327,28 @@ def loop(current_cache: dict=None):
                 reason = cs.state.terminated.reason or ''
                 
                 if reason == "OOMKilled" or exit_code != 0:
-                    status_lines.append(f"❌ Failed / OOMKilled (Exit Code: {exit_code})")
+                    status_lines.append(f"❌ failed / OOMKilled (Exit Code: {exit_code})")
                     condition = "red"
                 else:
-                    status_lines.append("✅ Completed successfully.")
+                    status_lines.append("✅ completed successfully.")
                     if condition not in ["red", "blue", "yellow"]:
                         condition = "green"
 
     if not train_job:
-        if new_cache.get("job_name") in ["n/a", None]:
+        previous_job = old_cache.get("job_name", "n/a")
+        
+        if previous_job in ["n/a", "unknown", "no data", "no info", None]:
             new_cache["job_name"] = "n/a"
-            new_cache["status"] = "no active training jobs found..."
+            new_cache["status"] = "training pod is idle..."
             new_cache["color"] = "green"
+        else:
+            new_cache["status"] = f"job '{previous_job}' has completed. training pod is idle..."
+            new_cache["color"] = "green"
+            new_cache["job_name"] = "n/a"
+            
     elif not status_lines:
-        new_cache["status"] = "no training pod status found..."
-        new_cache["color"] = "red"
+        new_cache["status"] = "there is a training pod but with no status..."
+        new_cache["color"] = "yellow"
     else:
         new_cache["status"] = "\n".join(status_lines) + "\n"
         new_cache["color"] = condition
@@ -344,21 +358,23 @@ def loop(current_cache: dict=None):
 
 async def monitor_loop(frontend_cache: FrontendCache, db_manager: DatabaseManager):
     """
-    monitors kubernetes for job updates and caches results for frontend retrieval.
+    Monitors kubernetes for job updates and caches results for frontend retrieval.
     """
     while True:
         try:
-            cache_data = frontend_cache.get_all()
+            cache_data = await frontend_cache.get_all() or {}
             new_data = await run_in_threadpool(loop, cache_data)
-        
+            interval = 2
+
             if new_data.get("color") == "green":
-                db_manager.rectify(db_manager.get_db_running_jobs())
+                interval = 10
+                running_jobs = await db_manager.get_db_running_jobs()
+                await db_manager.rectify(running_jobs)
 
-            new_data['history'] = db_manager.get_db_history(limit=20)
+            history_data = await db_manager.get_db_history(limit=20)
+            new_data['history'] = history_data
                 
-            frontend_cache.set(new_data)
-
-            interval = 10 if new_data.get("color") == "green" else 2
+            await frontend_cache.set(new_data)
             await asyncio.sleep(interval)
                 
         except asyncio.CancelledError:
@@ -372,28 +388,8 @@ async def monitor_loop(frontend_cache: FrontendCache, db_manager: DatabaseManage
             except asyncio.CancelledError:
                 raise
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    db_manager = DatabaseManager(DB_PATH)
-    frontend_cache = FrontendCache()
-    app.state.frontend_cache = frontend_cache
-    
-    monitor_task = asyncio.create_task(monitor_loop(frontend_cache, db_manager))
-    logger.info("monitor_loop started...")
-    
-    try:
-        yield
-    finally:
-        logger.info("shutting down monitor_loop...")
-        monitor_task.cancel()
-        try:
-            await monitor_task
-        except asyncio.CancelledError:
-            logger.info("monitor_loop task successfully cancelled.")
-        except Exception as e:
-            logger.error(f"error during monitor_loop shutdown: {e}")
-
 
     dir = "/app/data"
     d_seq = 25 # dimension sequence (context window size/prompt length)
@@ -421,7 +417,7 @@ async def lifespan(app: FastAPI):
                    'num_layers': 6,
                    'd_gen': d_gen,
                    'd_vec': d_vec,
-                   'temperature': 1000,
+                   'temperature': 1,
                    'top_k': 3,
                    'embed_param': {'tokens': (d_vocab, d_vec, None, True), 
                                    #'y': (d_vocab, d_vec, None, True),
@@ -435,6 +431,15 @@ async def lifespan(app: FastAPI):
     sample_param = {}
     sched_param = {}
 
+    db_manager = DatabaseManager(DB_PATH)
+    frontend_cache = FrontendCache()
+
+    await db_manager._init_db()
+
+    app.state.db_manager = db_manager
+    app.state.frontend_cache = frontend_cache
+    app.state.model_lock = asyncio.Lock()
+
     app.state.learner = Learn(
         [TinyShakes], GPT, Metric=Metric, Sampler=Selector, 
         Optimizer=None, Scheduler=None, Criterion=None,
@@ -444,7 +449,20 @@ async def lifespan(app: FastAPI):
         dir=dir, save_model=False, load_model='tinyshakes384', 
         gpu=False)
     
-    app.state.model_lock = threading.Lock()
+    monitor_task = asyncio.create_task(monitor_loop(frontend_cache, db_manager))
+    logger.info("monitor_loop started...")
+
+    try:
+        yield
+    finally:
+        logger.info("shutting down monitor_loop...")
+        monitor_task.cancel()
+        try:
+            await monitor_task
+        except asyncio.CancelledError:
+            logger.info("monitor_loop task successfully cancelled.")
+        except Exception as e:
+            logger.error(f"error during monitor_loop shutdown: {e}")
 
 app = FastAPI(lifespan=lifespan)
 
@@ -458,32 +476,29 @@ async def add_no_cache_headers(request: Request, call_next):
 
 @app.get("/get_log")
 async def get_log(request: Request): 
-    data = {}
-    cache = request.app.state.frontend_cache
-    log_keys = [key for key in cache.cache.keys() if 'log' in key]
-    for k in log_keys:
-        data[k] = cache.get(k)
-    return data if data else {"log": "no log data..."}
+    cache_data = await request.app.state.frontend_cache.get_all()
+    data = {k: v for k, v in cache_data.items() if 'log' in k}
+    return data if data else {"log": "no data"}
 
 @app.get("/job_status")
 async def get_job_status(request: Request):
-    cache = request.app.state.frontend_cache
-    status = cache.get('status', default="no status data...")
-    color = cache.get('color', default="yellow")
+    cache_data = await request.app.state.frontend_cache.get_all()
     
     return {
-        "status": status,
-        "color": color
+        "status": cache_data.get('status', "no status data"),
+        "color": cache_data.get('color', "yellow"),
+        "job_name": cache_data.get('job_name', "no data")
     }
 
 @app.get("/history")
 async def get_history(request: Request):
-    cache: FrontendCache = request.app.state.frontend_cache
-    data = cache.get('history', default=None)
-    return data if data else {"history": {"status": "no history data found..."}}
+    cache_data = await request.app.state.frontend_cache.get_all() or {}
+    data = cache_data.get('history')
+    if data: return data
+    return []
 
 @app.delete("/history/clear")
-async def clear_latest_history():
+async def clear_latest_history(request: Request): # 1. Inject the request object
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("""
@@ -500,21 +515,23 @@ async def clear_latest_history():
             async with db.execute("SELECT * FROM job_history ORDER BY created_at DESC LIMIT 20") as cursor:
                 rows = await cursor.fetchall()
                 
-        current_cache = app.state.frontend_cache.get_all() or {}
-        current_cache['history'] = [dict(row) for row in rows] if rows else {"status": "no history data found..."}
-        app.state.frontend_cache.set(current_cache)
+        cache = request.app.state.frontend_cache
+        current_cache = await cache.get_all()
+        
+        current_cache['history'] = [dict(row) for row in rows] if rows else []
+        
+        await cache.set(current_cache)
 
-        return {"status": "most recent job entry successfully deleted", "color": "green"}
+        return {"status": "most recent job entry successfully deleted..", "color": "green"}
         
     except Exception as e:
-        logger.error(f"failed to delete latest history: {e}", exc_info=True)
+        logger.error(f"failed to delete latest history entry: {e}", exc_info=True)
         raise HTTPException(
             status_code=500, 
-            detail=f"failed to alter database log history: {str(e)}"
+            detail=f"failed to delete latest history entry: {str(e)}"
         )
-   
 @app.delete("/stop_train")
-async def stop_training():
+async def stop_training(request: Request):
     try:
         batch_v1 = client.BatchV1Api()
         jobs = await anyio.to_thread.run_sync(
@@ -546,14 +563,14 @@ async def stop_training():
                 
             await db.commit()
 
-        current_cache = app.state.frontend_cache.get_all() or {}
+        current_cache = await request.app.state.frontend_cache.get_all() or {}
         current_cache.update({
             "color": "green",
-            "status": "✅ All active training jobs were successfully cancelled."
+            "status": f"stopping {job_name}..."
         })
-        app.state.frontend_cache.set(current_cache)
+        await request.app.state.frontend_cache.set(current_cache)
 
-        return {"main.stop_training": f"stopped {len(jobs.items)} training job(s).", "color": "yellow"}
+        return {"main.stop_training": f"stopping {job_name}...", "color": "yellow"}
         
     except Exception as e:
         logger.error(f"main.stop_training failed to stop jobs: {e}", exc_info=True)
@@ -574,10 +591,14 @@ async def health():
     return {"main.health": "healthy", "mode": "cpu"}  
 
 @app.post("/train")
-async def trigger_training(config: SimpleTrainConfig):
+async def trigger_training(config: SimpleTrainConfig, request: Request):
     skaffold_image_sagan_backend = get_current_image()
     
-    current_cache = app.state.frontend_cache.get_all() or {}
+    cache = request.app.state.frontend_cache
+    
+    current_cache = await cache.get_all()
+    
+    current_cache = current_cache or {}
     current_color = current_cache.get('color', 'green')
     
     if current_color != "green":
@@ -592,7 +613,8 @@ async def trigger_training(config: SimpleTrainConfig):
         "job-group": "train-job",
         "app": "train-job",
         "app.kubernetes.io/name": "train-job",  
-        "job-name": job_name
+        "job-name": job_name,
+        "job_name": job_name
     }
 
     job_metadata = client.V1ObjectMeta(name=job_name, labels=job_labels)
@@ -686,9 +708,9 @@ async def trigger_training(config: SimpleTrainConfig):
         current_cache.update({
             "job_name": job_name, 
             "color": "blue", 
-            "status": "Running 🏃"
+            "status": "running...🏃"
         })
-        app.state.frontend_cache.set(current_cache)
+        await app.state.frontend_cache.set(current_cache)
         
         return {"message": "job launched successfully", "job_name": job_name}
 
@@ -697,23 +719,25 @@ async def trigger_training(config: SimpleTrainConfig):
         raise HTTPException(status_code=500, detail=f"Failed to schedule job: {str(e)}")
     
 @app.post("/jobs/{job_name}/callback")
-async def job_callback(job_name: str, payload: JobUpdateSchema):
+async def job_callback(job_name: str, payload: JobUpdateSchema, request: Request):
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            cursor = await db.execute(
-                """UPDATE job_history 
-                   SET status = ?, test_loss = ?, finished_at = CURRENT_TIMESTAMP 
-                   WHERE job_name = ?""", 
-                (payload.status, payload.test_loss, job_name)
-            )
-            await db.commit()
-            
-            if cursor.rowcount == 0:
-                raise HTTPException(status_code=404, detail="Job record not found")
-        
-        current_cache = app.state.frontend_cache.get_all() or {}
+        db_manager = request.app.state.db_manager 
+        cache = request.app.state.frontend_cache
         
         is_success = "success" in payload.status.lower() or "complete" in payload.status.lower()
+        
+        metric_update = {
+            "status": payload.status,
+            "test_loss": payload.test_loss
+        }
+        
+        if is_success:
+            metric_update["finished_at"] = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        
+        await db_manager.update(job_name=job_name, metric_update=metric_update)
+        
+        current_cache = await cache.get_all()
+        current_cache = current_cache or {}
         
         current_cache.update({
             "job_name": job_name,
@@ -721,31 +745,29 @@ async def job_callback(job_name: str, payload: JobUpdateSchema):
             "status": "✅ Completed successfully." if is_success else f"❌ Failed: {payload.status}"
         })
         
-        app.state.frontend_cache.set(current_cache)
+        await cache.set(current_cache)
         
-        logger.info(f"Database and cache updated by callback for job: {job_name}")
+        logger.info(f"update callback successful for: {job_name}")
         return {"status": "updated"}
         
     except HTTPException as he:
         raise he
     except Exception as e:
-        logger.error(f"Failed handling callback update: {e}")
-        raise HTTPException(status_code=500, detail="Internal database error")
+        logger.error(f"failed handling callback update: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="internal database error")
 
 @app.post("/prompt")
 async def handle_text(request: Request, prompt: TextData):
-
     learner = request.app.state.learner
     lock = request.app.state.model_lock
     
-    def locked_predict(text_input: str):
-        with lock:
-            return learner.run_experiment(prompt=text_input)
     try:
-        response = await run_in_threadpool(locked_predict, prompt.content)
-        logger.info(f"prompt: {prompt.content}\nresponse {response}")
-        # match frontend's expected key "response"
+        async with lock:
+            response = await run_in_threadpool(learner.run_experiment, prompt=prompt.content)
+            
+        logger.info(f"prompt: {prompt.content}\nresponse: {response}")
         return {"response": response} 
+        
     except Exception as e:
         full_trace = traceback.format_exc()
         logger.error(f"main.handle_text failed: {e}\n{full_trace}")
@@ -753,6 +775,3 @@ async def handle_text(request: Request, prompt: TextData):
             status_code=500, 
             detail={"message": str(e), "traceback": full_trace}
         )
-    
-if __name__ == "__main__":
-    asyncio.run(main())

@@ -80,8 +80,13 @@ spec:
           value: sagan-backend # skaffold replaces this
         - name: PYTHONUNBUFFERED
           value: "1"
-        command: ["/app/.venv/bin/python", "-m", "uvicorn", "main:app",
-          "--host", "0.0.0.0", "--port", "8000"]
+        command: [
+          "/app/.venv/bin/python", "-m", "uvicorn", "main:app",
+          "--host", "0.0.0.0", 
+          "--port", "8000",
+          "--log-level", "info",
+          "--loop", "uvloop"
+        ]
         resources:
           requests:
             memory: "2Gi"
