@@ -126,7 +126,13 @@ gcloud container clusters get-credentials ${CLUSTER} --zone ${ZONE}
 kubectl create namespace sagan-app --save-config
 
 gcloud iam service-accounts create sagan-gsa \
-    --display-name="sagan gke service account"
+    --display-name="sagan-gsa" 
+    
+gcloud iam service-accounts create sagan-frontend-gsa \
+    --description="Minimal identity for the sagan streamlit spot googleapi call" \
+    --display-name="sagan-frontend-gsa" \
+    --project=sagan-5
+
 
 gcloud projects add-iam-policy-binding ${PROJECT_ID} \
     --member="serviceAccount:sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com" \
@@ -151,9 +157,20 @@ gcloud storage buckets add-iam-policy-binding gs://${BUCKET_NAME} \
 
 kubectl create serviceaccount sagan-backend-ksa -n sagan-app
 
-gcloud iam service-accounts add-iam-policy-binding sagan-gsa@${PROJECT_ID}.iam.gserviceaccount.com \
+gcloud iam service-accounts create sagan-frontend-gsa \
+    --description="Minimal identity for the sagan streamlit spot googleapi call" \
+    --display-name="sagan-frontend-gsa" \
+    --project=sagan-5
+
+kubectl create serviceaccount sagan-frontend-ksa -n sagan-app
+
+gcloud iam service-accounts add-iam-policy-binding \
+    sagan-frontend-gsa@sagan-5.iam.gserviceaccount.com \
     --role="roles/iam.workloadIdentityUser" \
-    --member="serviceAccount:${PROJECT_ID}.svc.id.goog[sagan-app/sagan-backend-ksa]"
+    --member="serviceAccount:sagan-5.svc.id.goog[sagan-app/sagan-frontend-ksa]" \
+    --project=sagan-5
+
+
 
 #bucket creation
 
@@ -343,4 +360,45 @@ kubectl exec backend-deployment-5948dfb4bb-kpqxd -n sagan-app -- cat /app/data/b
 kubectl exec backend-deployment-5bbc8df66f-zwrjn -n sagan-app -- sh -c 'rm /app/data/*txt'
 
 kubectl exec -it backend-deployment-5bbc8df66f-zwrjn -n sagan-app -c backend -- netstat -tuln
+
+gcloud container node-pools describe dedicated-pool \
+    --cluster=sagan-cluster \
+    --region=us-central1 \
+    --format="value(config.workloadMetadataConfig.mode)"
+
+gcloud iam service-accounts get-iam-policy \
+    sagan-frontend-gsa@sagan-5.iam.gserviceaccount.com \
+    --project=sagan-5
+
+gcloud projects get-iam-policy sagan-5 \
+    --flatten="bindings[].members" \
+    --format="table(bindings.role)" \
+    --filter="bindings.members:serviceAccount:sagan-frontend-gsa@sagan-5.iam.gserviceaccount.com"
+
+gcloud iam service-accounts add-iam-policy-binding sagan-frontend-gsa@sagan-5.iam.gserviceaccount.com \
+    --role="roles/iam.workloadIdentityUser" \
+    --member="serviceAccount:sagan-5.svc.id.goog[sagan-app/sagan-frontend-ksa]" \
+    --project=sagan-5
+
+gcloud projects add-iam-policy-binding sagan-5 \
+    --member="serviceAccount:sagan-gsa@sagan-5.iam.gserviceaccount.com" \
+    --role="roles/artifactregistry.writer"
+
+gcloud projects add-iam-policy-binding sagan-5 \
+    --member="serviceAccount:sagan-frontend-gsa@sagan-5.iam.gserviceaccount.com" \
+    --role="roles/compute.viewer"
+
+gcloud projects add-iam-policy-binding sagan-5 \
+    --member="serviceAccount:sagan-frontend-gsa@sagan-5.iam.gserviceaccount.com" \
+    --role="roles/serviceusage.serviceUsageConsumer"
+
+
+
+gcloud beta compute advice capacity \
+    --provisioning-model=SPOT \
+    --instance-selection-machine-types=e2-standard-2 \
+    --target-distribution-shape=ANY_SINGLE_ZONE \
+    --size=1 \
+    --region=us-central1
+
 

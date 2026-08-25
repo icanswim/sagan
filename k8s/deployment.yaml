@@ -119,12 +119,14 @@ spec:
     - port: 8000
       targetPort: 8000
 ---
-# Frontend Service Account (no GCP permissions needed)
+# Frontend Service Account
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: sagan-frontend-ksa
   namespace: sagan-app
+  annotations:
+    iam.gke.io/gcp-service-account: sagan-frontend-gsa@sagan-5.iam.gserviceaccount.com
 ---
 # Frontend Deployment
 apiVersion: apps/v1
@@ -148,6 +150,7 @@ spec:
       serviceAccountName: sagan-frontend-ksa
       nodeSelector:
         cloud.google.com/gke-nodepool: "dedicated-pool"
+        iam.gke.io/gke-metadata-server-enabled: "true"
       containers:
       - name: frontend
         image: sagan-frontend # skaffold replaces this
@@ -174,6 +177,12 @@ spec:
           value: "http://backend-service:8000"
         - name: PYTHONUNBUFFERED
           value: "1"
+        - name: GCP_PROJECT_ID
+          value: "${PROJECT_ID}" 
+        - name: GCP_REGION
+          value: "${REGION}"
+        - name: GCP_ZONE
+          value: "${ZONE_LETTER}"
 ---
 # Frontend Service (GKE External Load Balancer)
 apiVersion: v1

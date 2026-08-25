@@ -1,5 +1,5 @@
 import os, uuid, traceback
-import asyncio, copy, time
+import asyncio, copy
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
@@ -24,7 +24,7 @@ from cosmosis.dataset import AsTensor
 
 DB_PATH = "/app/db/job_history.db"
 NAMESPACE = "sagan-app"
-DEFAULT_CACHE = {"status": "",
+DEFAULT_CACHE = {"status": "no data",
                  "color": "grey",  
                  "history": {"status": "no data"},
                  "job_name": "no data",
@@ -52,7 +52,7 @@ class FrontendCache:
     async def set(self, key_or_dict, value=None):
         async with self.lock:
             if isinstance(key_or_dict, dict):
-                self.cache.update(key_or_dict)
+                self.cache = copy.deepcopy(key_or_dict)
             else:
                 self.cache[key_or_dict] = value
 
@@ -88,7 +88,7 @@ class DatabaseManager:
         "n": "INTEGER",
         "status": "TEXT",
         "test_loss": "REAL",
-        "created_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        "created_at": "TIMESTAMP DEFAULT (datetime('now'))", # Fix: Standardized format
         "finished_at": "TIMESTAMP"
     }
 
@@ -143,17 +143,9 @@ class DatabaseManager:
                 SELECT *, 
                 CASE 
                     WHEN finished_at IS NOT NULL THEN 
-                        printf('%02d:%02d:%02d', 
-                            CAST((julianday(finished_at) - julianday(created_at)) * 24 AS INT),
-                            CAST(((julianday(finished_at) - julianday(created_at)) * 1440) % 60 AS INT),
-                            CAST(((julianday(finished_at) - julianday(created_at)) * 86400) % 60 AS INT)
-                        )
+                        time(strftime('%s', finished_at) - strftime('%s', created_at), 'unixepoch')
                     WHEN status = 'running' THEN 
-                        printf('%02d:%02d:%02d', 
-                            CAST((julianday('now') - julianday(created_at)) * 24 AS INT),
-                            CAST(((julianday('now') - julianday(created_at)) * 1440) % 60 AS INT),
-                            CAST(((julianday('now') - julianday(created_at)) * 86400) % 60 AS INT)
-                        )
+                        time(strftime('%s', 'now') - strftime('%s', created_at), 'unixepoch')
                     ELSE '00:00:00'
                 END as training_time
                 FROM job_history 
@@ -175,7 +167,7 @@ class DatabaseManager:
             
             query = """
                 SELECT job_name,
-                       CAST((julianday('now') - julianday(created_at)) * 86400 AS INT) as training_time
+                       (strftime('%s', 'now') - strftime('%s', created_at)) as training_time
                 FROM job_history 
                 WHERE status = 'running'
             """
@@ -185,14 +177,15 @@ class DatabaseManager:
                 return [dict(row) for row in rows]
         
     async def rectify(self, zombies: list[dict]) -> None:
+        # update db with found silent failures (jobs that are running in db but not in k8s)
         if not zombies:
             return
-        
+        # give it 60 seconds to appear in the gke api
         filtered_zombies = [job for job in zombies if job.get('training_time', 0) > 60]
         if not filtered_zombies:
             return
         
-        timestamp = datetime.now(timezone.utc).isoformat()
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         update_data = [(timestamp, job.get('job_name')) for job in filtered_zombies if job.get('job_name')]
         
         for job in filtered_zombies:
@@ -259,37 +252,53 @@ def get_container_log(pod_name, container_name):
     except Exception as e:
         return f"system error loading log history: {e}"
 
-def loop(old_cache: dict=None):
-    old_cache = old_cache or DEFAULT_CACHE.copy()
-    new_cache = DEFAULT_CACHE.copy()
+def loop(old_cache: dict = None):
+    old_cache = old_cache or copy.deepcopy(DEFAULT_CACHE)
+    new_cache = copy.deepcopy(DEFAULT_CACHE)
 
-    if old_cache['color'] == 'yellow':
-        time.sleep(5)
-    
     status_lines = []
     condition = "green"  
     train_job = False  
 
     pods = get_pods(label_selector="app in (backend, train-job)")
+    now = datetime.now(timezone.utc)
     
     for p in pods:
         pod_name = p.metadata.name or "unknown"
         pod_labels = p.metadata.labels or {}
         pod_app = pod_labels.get("app", "")
 
-        for container_name in get_container_names(p):
-            if container_name in ["train-job", "backend"]:
-                log = get_container_log(pod_name, container_name)
-                new_cache[f'{pod_name}-log'] = (
-                    f"--- pod: {pod_name}, container: {container_name} ---\n{log}\n"
-                )
+        if not p.status:
+            continue
 
         if pod_app == "train-job":
             train_job = True
             new_cache['job_name'] = pod_labels.get('job_name', 'unknown')
 
-        if pod_app == "backend" or not p.status:
-            continue
+        statuses = (p.status.init_container_statuses or []) + (p.status.container_statuses or [])
+        
+        for cs in statuses:
+            if cs.name not in ["train-job", "backend"] or not cs.state:
+                continue
+
+            if cs.state.running or cs.state.waiting:
+                log = get_container_log(pod_name, cs.name)
+                new_cache[f'{pod_name}-log'] = (
+                    f"--- pod: {pod_name}, container: {cs.name} ---\n{log}\n"
+                )
+            
+            elif cs.state.terminated:
+                finished_at = cs.state.terminated.finished_at
+                if finished_at:
+                    time_delta = now - finished_at.replace(tzinfo=timezone.utc)
+                    if time_delta.total_seconds() <= 3600:
+                        log = get_container_log(pod_name, cs.name)
+                        new_cache[f'{pod_name}-log'] = (
+                            f"--- pod: {pod_name}, container: {cs.name} (Terminated) ---\n{log}\n"
+                        )
+
+        if pod_app == "backend":
+            continue  
 
         if p.status.phase == "Failed" and p.status.reason == "Evicted":
             status_lines.append("📉 node capacity exceeded (pod evicted).")
@@ -311,7 +320,6 @@ def loop(old_cache: dict=None):
 
             elif cs.state.running:
                 current_status = old_cache.get('status', '').strip()
-                
                 if current_status == 'running...🏃':
                     status_lines.append('running.🏃...')  
                 elif current_status == 'running.🏃...':
@@ -336,7 +344,6 @@ def loop(old_cache: dict=None):
 
     if not train_job:
         previous_job = old_cache.get("job_name", "n/a")
-        
         if previous_job in ["n/a", "unknown", "no data", "no info", None]:
             new_cache["job_name"] = "n/a"
             new_cache["status"] = "training pod is idle..."
@@ -358,20 +365,25 @@ def loop(old_cache: dict=None):
 
 async def monitor_loop(frontend_cache: FrontendCache, db_manager: DatabaseManager):
     """
-    Monitors kubernetes for job updates and caches results for frontend retrieval.
+    monitors kubernetes for job updates and caches results for frontend retrieval
     """
     while True:
         try:
             cache_data = await frontend_cache.get_all() or {}
+
+            if cache_data.get('color') == 'yellow':
+                await asyncio.sleep(3)
+                cache_data = await frontend_cache.get_all() or {}
+
             new_data = await run_in_threadpool(loop, cache_data)
             interval = 2
-
+            # if green (idle/no jobs) any running jobs are silent failures
             if new_data.get("color") == "green":
                 interval = 10
                 running_jobs = await db_manager.get_db_running_jobs()
                 await db_manager.rectify(running_jobs)
 
-            history_data = await db_manager.get_db_history(limit=20)
+            history_data = await db_manager.get_db_history(limit=30)
             new_data['history'] = history_data
                 
             await frontend_cache.set(new_data)
@@ -474,15 +486,15 @@ async def add_no_cache_headers(request: Request, call_next):
     response.headers["Expires"] = "0"
     return response
 
-@app.get("/get_log")
-async def get_log(request: Request): 
-    cache_data = await request.app.state.frontend_cache.get_all()
-    data = {k: v for k, v in cache_data.items() if 'log' in k}
-    return data if data else {"log": "no data"}
+@app.get("/log")
+async def log(request: Request): 
+    cache_data = await request.app.state.frontend_cache.get_all() or {}
+    data = {k: v for k, v in cache_data.items() if '-log' in k}
+    return data if data else {"-log": "no data"}
 
 @app.get("/job_status")
 async def get_job_status(request: Request):
-    cache_data = await request.app.state.frontend_cache.get_all()
+    cache_data = await request.app.state.frontend_cache.get_all() or {}
     
     return {
         "status": cache_data.get('status', "no status data"),
@@ -493,12 +505,10 @@ async def get_job_status(request: Request):
 @app.get("/history")
 async def get_history(request: Request):
     cache_data = await request.app.state.frontend_cache.get_all() or {}
-    data = cache_data.get('history')
-    if data: return data
-    return []
+    return {"history": cache_data.get('history', {"status": "no data"})}
 
 @app.delete("/history/clear")
-async def clear_latest_history(request: Request): # 1. Inject the request object
+async def clear_latest_history(request: Request): 
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("""
@@ -517,12 +527,10 @@ async def clear_latest_history(request: Request): # 1. Inject the request object
                 
         cache = request.app.state.frontend_cache
         current_cache = await cache.get_all()
-        
         current_cache['history'] = [dict(row) for row in rows] if rows else []
-        
         await cache.set(current_cache)
 
-        return {"status": "most recent job entry successfully deleted..", "color": "green"}
+        return {"status": "any active jobs stopped and most recent job entry successfully deleted..", "color": "green"}
         
     except Exception as e:
         logger.error(f"failed to delete latest history entry: {e}", exc_info=True)
@@ -530,12 +538,15 @@ async def clear_latest_history(request: Request): # 1. Inject the request object
             status_code=500, 
             detail=f"failed to delete latest history entry: {str(e)}"
         )
+
 @app.delete("/stop_train")
 async def stop_training(request: Request):
     try:
         batch_v1 = client.BatchV1Api()
+        
         jobs = await anyio.to_thread.run_sync(
-            lambda: batch_v1.list_namespaced_job(namespace=NAMESPACE)
+            batch_v1.list_namespaced_job, 
+            NAMESPACE
         )
         
         if not jobs.items:
@@ -546,8 +557,8 @@ async def stop_training(request: Request):
                 job_name = job.metadata.name
                 
                 await anyio.to_thread.run_sync(
-                    lambda j_name=job_name: batch_v1.delete_namespaced_job(
-                        name=j_name, 
+                    lambda j=job_name: batch_v1.delete_namespaced_job(
+                        name=j, 
                         namespace=NAMESPACE,
                         propagation_policy="Foreground" 
                     )
@@ -578,14 +589,18 @@ async def stop_training(request: Request):
     
 @app.post("/reload_model")
 async def reload_model():
-    with app.state.model_lock:
+    async with app.state.model_lock:
         try:
-            app.state.learner.reload_model('tinyshakes384')
+            await anyio.to_thread.run_sync(
+                app.state.learner.reload_model, 
+                'tinyshakes384'
+            )
             return {"main.reload_model": "weights updated successfully!"}
+            
         except Exception as e:
-            logger.error(f"main.reload_model failed to reload model: {e}")
-            return {"main.reload_model": f"reload failed: {str(e)}"}
-        
+            logger.error(f"main.reload_model failed to reload model: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"reload failed: {str(e)}")
+
 @app.get("/health")
 async def health():
     return {"main.health": "healthy", "mode": "cpu"}  
@@ -699,7 +714,7 @@ async def trigger_training(config: SimpleTrainConfig, request: Request):
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
                 "INSERT INTO job_history (job_name, batch_size, epoch, n, status, created_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
-                (job_name, config.batch_size, config.epoch, config.n, "running")
+                (job_name, int(config.batch_size), int(config.epoch), int(config.n), "running")
             )
             await db.commit()
 
